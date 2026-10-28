@@ -1,0 +1,239 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MonetaTribe | Login</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <main class="login-container">
+        <div class="brand">
+            <div class="brand-icon">M</div>
+            <h1>MonetaTribe</h1>
+            <p>Your money. Your plan. Your future.</p>
+        </div>
+
+        <section class="login-card">
+            <h2>Welcome back</h2>
+            <p class="subtitle">Sign in to manage your money.</p>
+
+            <form id="loginForm">
+                <label for="username">Username</label>
+                <input type="text" id="username"
+                       placeholder="Enter your username" required>
+
+                <label for="password">Password</label>
+                <input type="password" id="password"
+                       placeholder="Enter your password" required>
+
+                <label class="remember">
+                    <input type="checkbox" id="rememberMe">
+                    Remember me
+                </label>
+
+                <button type="submit" class="primary-button">
+                    Login
+                </button>
+            </form>
+
+            <p class="signup-text">
+                New to MonetaTribe?
+                <button type="button" id="createAccount"
+                        class="text-button">Create Account</button>
+            </p>
+
+            <p id="message" role="status"></p>
+        </section>
+
+        <footer>Simple budgeting. Better decisions.</footer>
+        
+<section class="login-card" id="createAccountPage" hidden>
+    <h2>Create Account</h2>
+    <p class="subtitle">Start organising your money.</p>
+
+    <form id="registerForm">
+        <label for="newUsername">Username</label>
+        <input type="text" id="newUsername"
+               placeholder="Choose a username"
+               required minlength="3">
+
+        <label for="newPassword">Password</label>
+        <input type="password" id="newPassword"
+               placeholder="Create a password"
+               required minlength="8">
+
+        <button type="submit" class="primary-button">
+            Create Account
+        </button>
+    </form>
+
+    <p class="signup-text">
+        Already have an account?
+        <button type="button" id="backToLogin"
+                class="text-button">Login</button>
+    </p>
+</section>
+
+<section id="homePage" class="dashboard" hidden>
+    <header class="dashboard-header">
+        <div>
+            <h1>MonetaTribe</h1>
+            <p id="budgetPeriod">Your monthly budget</p>
+        </div>
+        <button id="logoutButton" class="text-button">Logout</button>
+    </header>
+
+    <section class="summary-grid">
+        <article class="summary-card">
+            <p>Total Spent</p>
+            <h2 id="totalSpent">₹0</h2>
+        </article>
+        <article class="summary-card">
+            <p>Actual Balance Left</p>
+            <h2 id="actualBalance">₹0</h2>
+        </article>
+        <article class="summary-card">
+            <p>Days Left</p>
+            <h2 id="daysLeft">0</h2>
+        </article>
+    </section>
+
+    <div class="section-heading">
+        <h2>Your Envelopes</h2>
+        <span id="envelopeCount">0 envelopes</span>
+    </div>
+
+    <section id="envelopeList" class="envelope-list">
+        <!-- Envelope cards will be added by JavaScript -->
+    </section>
+
+    <nav class="dashboard-actions">
+        <button data-page="transactionPage">+ Add Transaction</button>
+        <button data-page="historyPage">Transaction History</button>
+        <button data-page="transferPage">Transfer</button>
+        <button data-page="setupPage">Setup</button>
+    </nav>
+</section>
+
+<section id="setupPage" class="dashboard" hidden>
+    <header class="dashboard-header">
+        <div>
+            <h1>Budget Setup</h1>
+            <p>Plan your monthly budget</p>
+        </div>
+        <button id="backToHome" class="text-button">← Home</button>
+    </header>
+
+    <section class="summary-grid">
+        <article class="summary-card">
+            <p>Monthly Income</p>
+            <h2 id="setupIncome">₹40,000</h2>
+        </article>
+        <article class="summary-card">
+            <p>Total Budgeted</p>
+            <h2 id="setupBudgeted">₹17,000</h2>
+        </article>
+        <article class="summary-card">
+            <p>Unallocated</p>
+            <h2 id="setupUnallocated">₹23,000</h2>
+        </article>
+    </section>
+
+    <section class="summary-card">
+        <label for="monthlyIncomeInput">Monthly Income (₹)</label>
+        <input
+            type="number"
+            id="monthlyIncomeInput"
+            min="0"
+            value="40000"
+            required
+        >
+
+        <div class="section-heading">
+            <h2>Your Envelopes</h2>
+            <span id="setupEnvelopeCount">4 envelopes</span>
+        </div>
+
+        <div id="setupEnvelopeList"></div>
+
+        <button
+    id="addEnvelopeButton"
+    class="primary-button"
+    data-page="addEnvelopePage"
+>
+    + Add Envelope
+</button>
+
+        <p id="setupMessage"></p>
+    </section>
+</section>
+
+<section id="addEnvelopePage" class="dashboard" hidden>
+    <header class="dashboard-header">
+        <div>
+            <h1>Add Envelope</h1>
+            <p>Create a budget for a spending category</p>
+        </div>
+        <button id="cancelAddEnvelope" class="text-button">
+            ← Back to Setup
+        </button>
+    </header>
+
+    <section class="summary-grid">
+        <article class="summary-card">
+            <p>Monthly Income</p>
+            <h2 id="addEnvelopeIncome">₹40,000</h2>
+        </article>
+        <article class="summary-card">
+            <p>Already Budgeted</p>
+            <h2 id="addEnvelopeBudgeted">₹17,000</h2>
+        </article>
+        <article class="summary-card">
+            <p>Available to Allocate</p>
+            <h2 id="addEnvelopeAvailable">₹23,000</h2>
+        </article>
+    </section>
+
+    <section class="summary-card">
+        <form id="addEnvelopeForm">
+            <label for="envelopeName">Envelope Name</label>
+            <input
+                type="text"
+                id="envelopeName"
+                placeholder="e.g. Medical"
+                required
+                maxlength="40"
+            >
+
+            <label for="envelopeBudget">Monthly Budget (₹)</label>
+            <input
+                type="number"
+                id="envelopeBudget"
+                placeholder="Enter budget amount"
+                min="1"
+                step="1"
+                required
+            >
+
+            <p id="addEnvelopeMessage" role="status"></p>
+
+            <div class="dashboard-actions">
+                <button type="submit" class="primary-button">
+                    Add
+                </button>
+                <button type="button" id="addAnotherEnvelope">
+                    Add New
+                </button>
+            </div>
+        </form>
+    </section>
+</section>
+
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
