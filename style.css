@@ -553,3 +553,19 @@ body:has(#loginPage:not([hidden])) {
     .transaction-item span:nth-child(3) { grid-column: 1; color: var(--muted); }
     .transaction-item strong { grid-column: 2; grid-row: 1 / span 2; }
 }
+
+/* Transaction history: keep records prominent and management tools secondary. */
+.history-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
+.history-toolbar #historyCount { color: var(--muted); font-size: 14px; }
+.transaction-item { grid-template-columns: minmax(0, 1fr) auto; }
+.transaction-main-details { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.transaction-main-details strong { font-size: 15px; }
+.transaction-main-details span { color: var(--muted); font-size: 13px; }
+.transaction-amount { white-space: nowrap; }
+.transaction-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+.transaction-edit-form { margin: 18px 0; padding: 18px; border: 1px solid var(--border); border-radius: 12px; display: flex; flex-direction: column; gap: 9px; }
+.transaction-edit-form[hidden], .history-management[hidden] { display: none !important; }
+.transaction-edit-form h2 { margin: 0 0 6px; font-size: 18px; }
+.transaction-edit-form input, .transaction-edit-form select { width: 100%; }
+.transaction-edit-form .form-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+@media (max-width: 600px) { .history-toolbar { align-items: flex-start; } .transaction-actions button { flex: 1; } }

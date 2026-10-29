@@ -3,7 +3,7 @@
 const STORAGE_KEY = "monetaTribeData";
 
 // Pages and elements use the IDs from index.html.
-const pageIds = ["loginPage", "createAccountPage", "homePage", "setupPage", "addEnvelopePage", "transactionPage", "historyPage", "transferPage"];
+const pageIds = ["loginPage", "createAccountPage", "homePage", "setupPage", "editEnvelopePage", "addEnvelopePage", "transactionPage", "historyPage", "transferPage"];
 const $ = id => document.getElementById(id);
 
 const defaultEnvelopes = [
@@ -16,6 +16,7 @@ const defaultEnvelopes = [
 let envelopes = defaultEnvelopes.map(e => ({ ...e }));
 let transactions = [];
 let monthlyIncome = 40000;
+let historyManageMode = false;
 
 function loadAppData() {
     try {
@@ -74,7 +75,7 @@ function refreshAll() {
     saveAppData();
 }
 
-// Envelope action controls appear only in Budget Setup.
+// Envelope editing is managed from Budget Setup.
 function makeEnvelopeActions(envelopeName) {
     const wrapper = document.createElement("div");
     wrapper.className = "envelope-actions";
@@ -82,13 +83,8 @@ function makeEnvelopeActions(envelopeName) {
     edit.type = "button";
     edit.className = "envelope-edit-button";
     edit.textContent = "Edit";
-    edit.addEventListener("click", () => editEnvelope(envelopeName));
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "envelope-delete-button";
-    del.textContent = "Delete";
-    del.addEventListener("click", () => deleteEnvelope(envelopeName));
-    wrapper.append(edit, del);
+    edit.addEventListener("click", () => openEditEnvelope(envelopeName));
+    wrapper.append(edit);
     return wrapper;
 }
 
@@ -123,7 +119,7 @@ function renderDashboard() {
         progress.className = "progress-track";
         const fill = document.createElement("div");
         fill.className = "progress-fill";
-        fill.style.width = `${envelope.budget > 0 ? Math.min(100, envelope.spent / envelope.budget * 100) : 0}%`;
+        fill.style.width = `${envelope.budget > 0 ? Math.max(0, Math.min(100, (envelope.budget - envelope.spent) / envelope.budget * 100)) : 0}%`;
         progress.appendChild(fill);
         const amounts = document.createElement("div");
         amounts.className = "envelope-amounts";
@@ -167,23 +163,29 @@ function renderAddEnvelopeSummary() {
     setText("addEnvelopeAvailable", money(availableIncome()));
 }
 
-function editEnvelope(name) {
+let editingEnvelopeName = null;
+
+function openEditEnvelope(name) {
     const envelope = findEnvelope(name);
-    if (!envelope) return alert("Envelope not found.");
-    const enteredName = prompt("Envelope name:", envelope.name);
-    if (enteredName === null) return;
-    const newName = enteredName.trim();
-    if (!newName) return alert("Envelope name cannot be empty.");
-    if (envelopes.some(e => e !== envelope && e.name.toLowerCase() === newName.toLowerCase())) {
-        return alert("An envelope with that name already exists.");
-    }
-    const enteredBudget = prompt("Monthly budget (₹):", String(envelope.budget));
-    if (enteredBudget === null) return;
-    const newBudget = Number(enteredBudget);
-    if (!Number.isFinite(newBudget) || newBudget < 0) return alert("Enter a valid budget of zero or more.");
-    if (newBudget < envelope.spent) return alert("Budget cannot be lower than the amount already spent.");
-    const otherBudgets = totalBudget() - envelope.budget;
-    if (otherBudgets + newBudget > monthlyIncome) return alert("Total budgets cannot exceed monthly income.");
+    if (!envelope) return;
+    editingEnvelopeName = envelope.name;
+    $("editEnvelopeName").value = envelope.name;
+    $("editEnvelopeBudget").value = envelope.budget;
+    setText("editEnvelopeSpentNote", `Already spent: ${money(envelope.spent)}`);
+    setText("editEnvelopeUnallocated", `Unallocated amount: ${money(availableIncome())}`);
+    clearMessage("editEnvelopeMessage");
+    showPage("editEnvelopePage");
+}
+
+function saveEnvelopeEdits() {
+    const envelope = findEnvelope(editingEnvelopeName);
+    if (!envelope) return setMessage("editEnvelopeMessage", "Envelope not found.");
+    const newName = $("editEnvelopeName").value.trim();
+    const newBudget = Number($("editEnvelopeBudget").value);
+    if (!newName) return setMessage("editEnvelopeMessage", "Enter an envelope name.");
+    if (envelopes.some(e => e !== envelope && e.name.toLowerCase() === newName.toLowerCase())) return setMessage("editEnvelopeMessage", "An envelope with this name already exists.");
+    if (!Number.isFinite(newBudget) || newBudget < envelope.spent) return setMessage("editEnvelopeMessage", `Budget must be at least ${money(envelope.spent)}.`);
+    if (totalBudget() - envelope.budget + newBudget > monthlyIncome) return setMessage("editEnvelopeMessage", "Total budgets cannot exceed monthly income.");
     const oldName = envelope.name;
     envelope.name = newName;
     envelope.budget = newBudget;
@@ -192,19 +194,21 @@ function editEnvelope(name) {
         if (t.source === oldName) t.source = newName;
         if (t.destination === oldName) t.destination = newName;
     });
+    editingEnvelopeName = newName;
     refreshAll();
+    showPage("setupPage");
 }
 
 function deleteEnvelope(name) {
     const envelope = findEnvelope(name);
-    if (!envelope) return alert("Envelope not found.");
+    if (!envelope) return;
     const hasHistory = transactions.some(t => t.envelope === name || t.source === name || t.destination === name);
-    if (hasHistory || envelope.spent > 0) {
-        return alert("This envelope has spending or transfer history, so it cannot be deleted. You can edit its name or budget instead.");
-    }
+    if (hasHistory || envelope.spent > 0) return setMessage("editEnvelopeMessage", "This envelope has spending or transfer history and cannot be deleted.");
     if (!confirm(`Delete the envelope “${name}”?`)) return;
     envelopes = envelopes.filter(e => e !== envelope);
+    editingEnvelopeName = null;
     refreshAll();
+    showPage("setupPage");
 }
 
 function renderTransactionForm() {
@@ -233,16 +237,132 @@ function renderHistory() {
     list.replaceChildren();
     setText("historyCount", `${transactions.length} ${transactions.length === 1 ? "transaction" : "transactions"}`);
     setText("historyEmptyMessage", transactions.length ? "" : "No transactions recorded yet.");
+    const toggle = $("toggleHistoryManagement");
+    if (toggle) toggle.textContent = historyManageMode ? "Done" : "Edit History";
+    const panel = $("historyManagementPanel");
+    if (panel) panel.hidden = !historyManageMode;
     [...transactions].sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))).forEach(t => {
         const row = document.createElement("div");
         row.className = "transaction-item";
-        const desc = document.createElement("span"); desc.textContent = t.description || (t.type === "transfer" ? "Budget transfer" : "Expense");
+        const details = document.createElement("div"); details.className = "transaction-main-details";
+        const desc = document.createElement("strong"); desc.textContent = t.description || (t.type === "transfer" ? "Budget transfer" : "Expense");
         const category = document.createElement("span"); category.textContent = t.type === "transfer" ? `${t.source} → ${t.destination}` : (t.envelope || "—");
-        const date = document.createElement("span"); date.textContent = t.date || "";
-        const amount = document.createElement("strong"); amount.textContent = money(t.amount);
-        row.append(desc, category, date, amount);
+        const date = document.createElement("span"); date.className = "transaction-date"; date.textContent = t.date || "";
+        details.append(desc, category, date);
+        const amount = document.createElement("strong"); amount.className = "transaction-amount"; amount.textContent = money(t.amount);
+        row.append(details, amount);
+        if (historyManageMode) {
+            const actions = document.createElement("div"); actions.className = "transaction-actions";
+            if (t.type !== "transfer") {
+                const edit = document.createElement("button"); edit.type = "button"; edit.className = "secondary-button"; edit.textContent = "Modify";
+                edit.addEventListener("click", () => openTransactionEditor(t)); actions.appendChild(edit);
+            }
+            const remove = document.createElement("button"); remove.type = "button"; remove.className = "danger-button"; remove.textContent = "Delete";
+            remove.addEventListener("click", () => deleteSingleTransaction(t.id)); actions.appendChild(remove);
+            row.appendChild(actions);
+        }
         list.appendChild(row);
     });
+}
+
+function openTransactionEditor(transaction) {
+    if (!transaction || transaction.type === "transfer") return;
+    const form = $("editTransactionForm");
+    const select = $("editTransactionEnvelope");
+    select.replaceChildren();
+    envelopes.forEach(envelope => {
+        const option = document.createElement("option"); option.value = envelope.name; option.textContent = envelope.name; select.appendChild(option);
+    });
+    $("editTransactionId").value = String(transaction.id);
+    $("editTransactionDate").value = transaction.date || "";
+    $("editTransactionAmount").value = transaction.amount;
+    $("editTransactionEnvelope").value = transaction.envelope;
+    $("editTransactionDescription").value = transaction.description || "";
+    clearMessage("editTransactionMessage");
+    form.hidden = false;
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function saveEditedTransaction(event) {
+    event.preventDefault();
+    const id = Number($("editTransactionId").value);
+    const old = transactions.find(t => t.id === id);
+    if (!old || old.type === "transfer") return;
+    const nextEnvelope = findEnvelope($("editTransactionEnvelope").value);
+    const amount = Number($("editTransactionAmount").value);
+    const date = $("editTransactionDate").value;
+    const description = $("editTransactionDescription").value.trim();
+    if (!nextEnvelope || !date || !description || !Number.isFinite(amount) || amount <= 0) return setMessage("editTransactionMessage", "Complete all fields with a valid amount.");
+    const oldEnvelope = findEnvelope(old.envelope);
+    const availableInTarget = nextEnvelope.budget - nextEnvelope.spent + (nextEnvelope.name === old.envelope ? old.amount : 0);
+    if (amount > availableInTarget) return setMessage("editTransactionMessage", "The new amount exceeds the selected envelope's remaining budget.");
+    if (oldEnvelope) oldEnvelope.spent = Math.max(0, oldEnvelope.spent - Number(old.amount));
+    nextEnvelope.spent += amount;
+    old.envelope = nextEnvelope.name; old.amount = amount; old.date = date; old.description = description;
+    $("editTransactionForm").hidden = true;
+    clearMessage("editTransactionMessage");
+    refreshAll();
+    historyManageMode = true;
+    renderHistory();
+}
+
+function reverseTransaction(t) {
+    const amount = Number(t.amount) || 0;
+    if (t.type === "transfer") {
+        const source = findEnvelope(t.source);
+        const destination = findEnvelope(t.destination);
+        if (destination && destination.budget - amount < destination.spent) {
+            return `Cannot delete this transfer because ${destination.name} has already spent some of the transferred budget. Reduce its spending or adjust the budget first.`;
+        }
+        if (source) source.budget += amount;
+        if (destination) destination.budget -= amount;
+    } else {
+        const envelope = findEnvelope(t.envelope);
+        if (envelope) envelope.spent = Math.max(0, envelope.spent - amount);
+    }
+    return "";
+}
+
+function deleteSingleTransaction(id) {
+    const transaction = transactions.find(t => t.id === id);
+    if (!transaction) return;
+    if (!confirm("Delete this transaction? The envelope balance will be adjusted.")) return;
+    const error = reverseTransaction(transaction);
+    if (error) { setMessage("historyManagementMessage", error); return; }
+    transactions = transactions.filter(t => t.id !== id);
+    clearMessage("historyManagementMessage");
+    refreshAll();
+}
+
+function deleteTransactionsByPeriod() {
+    const from = $("deleteTransactionsFrom").value;
+    const to = $("deleteTransactionsTo").value;
+    if (!from || !to) return setMessage("historyManagementMessage", "Choose both a from date and a to date.");
+    if (from > to) return setMessage("historyManagementMessage", "The from date must be on or before the to date.");
+    const selected = transactions.filter(t => String(t.date || "") >= from && String(t.date || "") <= to)
+        .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    if (!selected.length) return setMessage("historyManagementMessage", "No transactions were found in that date range.", false);
+    if (!confirm(`Delete ${selected.length} transaction(s) dated ${from} through ${to}? Envelope balances will be adjusted.`)) return;
+    for (const t of selected) {
+        const error = reverseTransaction(t);
+        if (error) { refreshAll(); return setMessage("historyManagementMessage", error); }
+        transactions = transactions.filter(item => item.id !== t.id);
+    }
+    refreshAll();
+    setMessage("historyManagementMessage", `Deleted ${selected.length} transaction(s).`, false);
+}
+
+function deleteAllTransactions() {
+    if (!transactions.length) return setMessage("historyManagementMessage", "There are no transactions to delete.", false);
+    if (!confirm(`Delete all ${transactions.length} transactions? Envelope balances will be adjusted.`)) return;
+    const selected = [...transactions].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    for (const t of selected) {
+        const error = reverseTransaction(t);
+        if (error) { refreshAll(); return setMessage("historyManagementMessage", error); }
+        transactions = transactions.filter(item => item.id !== t.id);
+    }
+    refreshAll();
+    setMessage("historyManagementMessage", `Deleted all ${selected.length} transaction(s).`, false);
 }
 
 function renderTransferForm() {
@@ -279,10 +399,31 @@ function updateSourceBalance() {
 
 // ==================== FORM HANDLERS ====================
 
+const ACCOUNTS_KEY = "monetaTribeDemoAccounts";
+const REMEMBER_EMAIL_KEY = "monetaTribeRememberedEmail";
+function getDemoAccounts() {
+    try {
+        const accounts = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "[]");
+        return Array.isArray(accounts) ? accounts : [];
+    } catch {
+        return [];
+    }
+}
+
+// Prototype-only accounts: credentials are stored in this browser, NOT securely.
 $("loginForm")?.addEventListener("submit", event => {
     event.preventDefault();
-    // Prototype-only entry: no real account authentication is configured.
+    const email = $("loginEmail").value.trim().toLowerCase();
+    const password = $("loginPassword").value;
+    const account = getDemoAccounts().find(item => item.email === email && item.password === password);
+    if (!account) {
+        setMessage("message", "Account not found or password is incorrect. Create an account first, or check your details.", true);
+        return;
+    }
     clearMessage("message");
+    if ($("rememberMe")?.checked) localStorage.setItem(REMEMBER_EMAIL_KEY, email);
+    else localStorage.removeItem(REMEMBER_EMAIL_KEY);
+    renderDashboard();
     showPage("homePage");
 });
 
@@ -290,9 +431,34 @@ $("createAccount")?.addEventListener("click", () => showPage("createAccountPage"
 $("backToLogin")?.addEventListener("click", () => showPage("loginPage"));
 $("registerForm")?.addEventListener("submit", event => {
     event.preventDefault();
-    alert("Account creation is not connected to a secure backend yet. This prototype stores budget data in this browser only.");
+    const name = $("registerName").value.trim();
+    const email = $("registerEmail").value.trim().toLowerCase();
+    const password = $("registerPassword").value;
+    const accounts = getDemoAccounts();
+    if (accounts.some(item => item.email === email)) {
+        alert("An account with this email already exists. Please log in.");
+        $("loginEmail").value = email;
+        showPage("loginPage");
+        return;
+    }
+    accounts.push({ name, email, password });
+    try {
+        localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
+    } catch (error) {
+        alert("Could not save the account in this browser. Check browser storage settings.");
+        return;
+    }
+    $("loginEmail").value = email;
+    $("loginPassword").value = password;
+    alert("Demo account created. You can now log in. This is a local prototype, not secure authentication.");
     showPage("loginPage");
 });
+
+const rememberedEmail = localStorage.getItem(REMEMBER_EMAIL_KEY);
+if (rememberedEmail) {
+    $("loginEmail").value = rememberedEmail;
+    $("rememberMe").checked = true;
+}
 
 $("logoutButton")?.addEventListener("click", () => showPage("loginPage"));
 $("backToHome")?.addEventListener("click", () => { renderDashboard(); showPage("homePage"); });
@@ -356,8 +522,7 @@ function submitEnvelope(addAnother = false) {
 $("addEnvelopeForm")?.addEventListener("submit", event => { event.preventDefault(); submitEnvelope(false); });
 $("addAnotherEnvelope")?.addEventListener("click", () => submitEnvelope(true));
 
-$("transactionForm")?.addEventListener("submit", event => {
-    event.preventDefault();
+function saveTransaction(addAnother = false) {
     const envelope = findEnvelope($("transactionEnvelope")?.value);
     const amount = Number($("transactionAmount")?.value);
     const description = $("transactionDescription")?.value.trim();
@@ -368,14 +533,39 @@ $("transactionForm")?.addEventListener("submit", event => {
     if (!date) return setMessage("transactionMessage", "Choose a date.");
     if (envelope.spent + amount > envelope.budget) return setMessage("transactionMessage", "This expense exceeds the envelope's remaining budget.");
     if (amount > actualBalance()) return setMessage("transactionMessage", "There is not enough overall balance for this expense.");
+    const keepEnvelope = envelope.name;
+    const keepDate = date;
     envelope.spent += amount;
     transactions.push({ id: Date.now(), type: "expense", envelope: envelope.name, amount, description, date });
     refreshAll();
     $("transactionForm").reset();
     renderTransactionForm();
-    setMessage("transactionMessage", "Transaction saved successfully.", false);
-    showPage("homePage");
+    if (addAnother) {
+        $("transactionEnvelope").value = keepEnvelope;
+        $("transactionDate").value = keepDate;
+        setMessage("transactionMessage", "Transaction saved. Enter the next one.", false);
+        showPage("transactionPage");
+        $("transactionAmount").focus();
+    } else {
+        clearMessage("transactionMessage");
+        showPage("homePage");
+    }
+}
+
+$("transactionForm")?.addEventListener("submit", event => {
+    event.preventDefault();
+    saveTransaction(false);
 });
+$("saveAndAddNewTransaction")?.addEventListener("click", () => saveTransaction(true));
+
+$("editEnvelopeForm")?.addEventListener("submit", event => {
+    event.preventDefault();
+    saveEnvelopeEdits();
+});
+$("deleteEnvelopeButton")?.addEventListener("click", () => {
+    if (editingEnvelopeName) deleteEnvelope(editingEnvelopeName);
+});
+$("cancelEditEnvelope")?.addEventListener("click", () => { renderSetup(); showPage("setupPage"); });
 
 $("transferFrom")?.addEventListener("change", updateSourceBalance);
 $("transferForm")?.addEventListener("submit", event => {
@@ -396,6 +586,18 @@ $("transferForm")?.addEventListener("submit", event => {
     showPage("homePage");
 });
 
-// Initial view: show the login page. Budget data remains saved in this browser.
+
+$("toggleHistoryManagement")?.addEventListener("click", () => {
+    historyManageMode = !historyManageMode;
+    if (!historyManageMode) $("editTransactionForm").hidden = true;
+    renderHistory();
+});
+$("editTransactionForm")?.addEventListener("submit", saveEditedTransaction);
+$("cancelEditTransaction")?.addEventListener("click", () => { $("editTransactionForm").hidden = true; clearMessage("editTransactionMessage"); });
+
+$("deleteTransactionsPeriod")?.addEventListener("click", deleteTransactionsByPeriod);
+$("deleteAllTransactions")?.addEventListener("click", deleteAllTransactions);
+
+// Initial view: login page. No data is erased when the page reloads.
 refreshAll();
 showPage("loginPage");

@@ -4,14 +4,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Moneta Tribe</title>
+    <title>MonetaTribe</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <main class="app-container">
 
     <section class="login-card" id="loginPage">
-        <h1>Moneta Tribe</h1>
+        <h1>MonetaTribe</h1>
         <p>Take control of your money.</p>
         <form id="loginForm">
             <label for="loginEmail">Email</label>
@@ -42,7 +42,7 @@
 
     <section id="homePage" class="dashboard" hidden>
         <header class="dashboard-header">
-            <div><h1>Moneta Tribe</h1><p id="budgetPeriod">Monthly Budget</p></div>
+            <div><h1>MonetaTribe</h1><p id="budgetPeriod">Monthly Budget</p></div>
             <button type="button" id="logoutButton" class="text-button">Logout</button>
         </header>
         <section class="summary-card">
@@ -84,6 +84,26 @@
             <p id="setupEnvelopeCount">0 envelopes</p>
             <div id="setupEnvelopeList"></div>
             <button type="button" id="addEnvelopeButton" class="primary-button">+ Add Envelope</button>
+        </section>
+    </section>
+
+    <section id="editEnvelopePage" class="dashboard" hidden>
+        <header class="dashboard-header">
+            <div><h1>Edit Envelope</h1><p>Update this envelope or delete it</p></div>
+            <button type="button" id="cancelEditEnvelope" class="text-button">← Budget Setup</button>
+        </header>
+        <section class="summary-card">
+            <form id="editEnvelopeForm">
+                <label for="editEnvelopeName">Envelope Name</label>
+                <input type="text" id="editEnvelopeName" maxlength="50" required>
+                <label for="editEnvelopeBudget">Monthly Budget (₹)</label>
+                <input type="number" id="editEnvelopeBudget" min="0" step="1" required>
+                <p id="editEnvelopeSpentNote"></p>
+                <p id="editEnvelopeUnallocated" class="available-balance-note"></p>
+                <p id="editEnvelopeMessage" role="status"></p>
+                <button type="submit" class="primary-button">Save Changes</button>
+                <button type="button" id="deleteEnvelopeButton" class="danger-button">Delete Envelope</button>
+            </form>
         </section>
     </section>
 
@@ -129,6 +149,7 @@
                 <input type="text" id="transactionDescription" maxlength="100" required placeholder="What did you spend on?">
                 <p id="transactionMessage" role="status"></p>
                 <button type="submit" class="primary-button">Save Transaction</button>
+                <button type="button" id="saveAndAddNewTransaction" class="secondary-button">Save &amp; Add New</button>
             </form>
         </section>
     </section>
@@ -139,7 +160,31 @@
             <button type="button" id="historyBackToHome" class="text-button">← Dashboard</button>
         </header>
         <section class="summary-card">
-            <p id="historyCount">0 transactions</p>
+            <div class="history-toolbar">
+                <span id="historyCount">0 transactions</span>
+                <button type="button" id="toggleHistoryManagement" class="secondary-button">Edit History</button>
+            </div>
+            <div id="historyManagementPanel" class="history-management" hidden>
+                <h2>Manage Transactions</h2>
+                <p>Modify or delete individual transactions, delete a date range, or clear the history.</p>
+                <div class="history-date-filters">
+                    <div><label for="deleteTransactionsFrom">From date</label><input type="date" id="deleteTransactionsFrom"></div>
+                    <div><label for="deleteTransactionsTo">To date</label><input type="date" id="deleteTransactionsTo"></div>
+                    <button type="button" id="deleteTransactionsPeriod" class="danger-button">Delete Period</button>
+                </div>
+                <button type="button" id="deleteAllTransactions" class="danger-button">Delete All Transactions</button>
+                <p id="historyManagementMessage" role="status"></p>
+            </div>
+            <form id="editTransactionForm" class="transaction-edit-form" hidden>
+                <h2>Modify Transaction</h2>
+                <input type="hidden" id="editTransactionId">
+                <label for="editTransactionDate">Date</label><input type="date" id="editTransactionDate" required>
+                <label for="editTransactionAmount">Amount (₹)</label><input type="number" id="editTransactionAmount" min="1" step="1" required>
+                <label for="editTransactionEnvelope">Envelope</label><select id="editTransactionEnvelope" required></select>
+                <label for="editTransactionDescription">Description</label><input type="text" id="editTransactionDescription" maxlength="100" required>
+                <div class="form-actions"><button type="submit" class="primary-button">Save Changes</button><button type="button" id="cancelEditTransaction" class="secondary-button">Cancel</button></div>
+                <p id="editTransactionMessage" role="status"></p>
+            </form>
             <div id="transactionHistoryList"></div>
             <p id="historyEmptyMessage">No transactions recorded yet.</p>
         </section>
