@@ -504,7 +504,7 @@ $("registerForm")?.addEventListener("submit", async event => {
     const password = $("registerPassword").value;
     const button = $("registerForm").querySelector('button[type="submit"]');
     if (button) button.disabled = true;
-    const { data, error } = await supabaseClient.auth.signUp({ email, password, options: { data: { full_name: name } } });
+    const { data, error } = await supabaseClient.auth.signUp({ email, password, options: { data: { full_name: name },emailRedirectTo: 'https://renjumathew7.github.io/MonetaTribe/' } });
     if (button) button.disabled = false;
     if (error) { alert(error.message); return; }
     if (data.session && data.user) {
