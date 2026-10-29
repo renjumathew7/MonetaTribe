@@ -361,3 +361,195 @@ footer {
         flex-direction: column;
     }
 }
+
+/* Fix login screen alignment */
+#loginPage {
+    width: 100%;
+    max-width: 420px;
+    margin: 0 auto;
+}
+
+/* Center login screen vertically and horizontally */
+body:has(#loginPage:not([hidden])) {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 24px 16px;
+}
+
+/* Fix Remember me checkbox alignment */
+.remember-me {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 18px 0 22px;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.remember-me input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--green);
+}
+
+/* Transfer page: selected source envelope balance */
+.source-balance-card {
+    margin: 18px 0 22px;
+    padding: 16px;
+    background: #f3f7f5;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+}
+
+.source-balance-card > p {
+    margin: 0 0 12px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.balance-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+}
+
+.balance-row:last-child {
+    border-bottom: none;
+}
+
+.balance-row strong {
+    text-align: right;
+}
+
+#sourceAvailable {
+    color: var(--green);
+    font-size: 17px;
+}
+
+/* Envelope edit and delete buttons */
+.envelope-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 18px;
+}
+
+.envelope-actions button {
+    flex: 1;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.envelope-edit-button {
+    background: #eaf3ef;
+    color: var(--green);
+    border: 1px solid var(--border);
+}
+
+.envelope-delete-button {
+    background: #fff1f0;
+    color: #b42318;
+    border: 1px solid #f2d0cd;
+}
+
+.envelope-actions button:hover {
+    opacity: 0.8;
+}
+
+.setup-envelope-item {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.setup-envelope-item:last-child {
+    border-bottom: none;
+}
+
+.setup-envelope-item > span {
+    font-weight: 600;
+}
+
+
+/* Moneta Tribe app layout and forms */
+.app-container {
+    width: 100%;
+    max-width: 1100px;
+    margin: 0 auto;
+}
+
+.login-card {
+    width: 100%;
+    max-width: 420px;
+    margin: 24px auto;
+    padding: 32px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    box-shadow: 0 12px 35px rgba(25, 65, 48, 0.06);
+}
+
+.login-card h1 { margin-top: 0; }
+.login-card > p { color: var(--muted); }
+.login-card form > label:not(.remember-me) { display: block; margin: 16px 0 8px; font-weight: 600; font-size: 14px; }
+.login-card form > input,
+.summary-card input,
+.summary-card select {
+    width: 100%;
+    min-height: 44px;
+    padding: 11px 12px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: #fff;
+    color: var(--text);
+    font: inherit;
+}
+.login-card form > input:focus,
+.summary-card input:focus,
+.summary-card select:focus { outline: 2px solid rgba(23, 107, 85, .2); border-color: var(--green); }
+
+.dashboard { padding: 28px 24px; }
+.summary-card { margin-bottom: 18px; }
+.summary-details { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 18px; margin-top: 16px; }
+.summary-details > div { flex: 1; min-width: 120px; }
+.summary-details h3 { margin: 6px 0 0; overflow-wrap: anywhere; }
+.envelopes-section { margin-top: 26px; }
+#envelopeList.envelope-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.envelope-card { min-width: 0; }
+.envelope-card .envelope-top h3 { overflow-wrap: anywhere; }
+.envelope-actions { display: flex; gap: 10px; margin-top: 16px; }
+.envelope-actions button { flex: 1; min-height: 38px; padding: 9px 12px; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; }
+.envelope-edit-button { color: var(--green); background: #eaf3ef; border: 1px solid var(--border); }
+.envelope-delete-button { color: #b42318; background: #fff1f0; border: 1px solid #f2d0cd; }
+.envelope-actions button:hover { opacity: .82; }
+.setup-envelope-item { display: flex; flex-direction: column; gap: 8px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.setup-envelope-item > span { font-weight: 600; overflow-wrap: anywhere; }
+.setup-total-budget { margin-top: 16px !important; font-weight: 700; }
+.transaction-item { display: grid; grid-template-columns: 1.4fr 1fr auto auto; gap: 12px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+.transaction-item span { overflow-wrap: anywhere; }
+#historyEmptyMessage:empty { display: none; }
+#addEnvelopeForm > label, #transactionForm > label, #transferForm > label { display: block; margin: 18px 0 8px; font-size: 14px; font-weight: 600; }
+#addEnvelopeForm button, #transactionForm button, #transferForm button { margin-top: 14px; }
+.secondary-button { padding: 12px 14px; border: 1px solid var(--border); border-radius: 9px; background: #fff; color: var(--green); font-weight: 700; cursor: pointer; }
+#addEnvelopeForm .secondary-button { width: 100%; }
+#addEnvelopeForm .primary-button, #transactionForm .primary-button, #transferForm .primary-button { width: 100%; }
+#message, #addEnvelopeMessage, #transactionMessage, #transferMessage { font-size: 13px; }
+
+@media (max-width: 650px) {
+    .login-card { padding: 24px 20px; }
+    .dashboard { padding: 22px 16px; }
+    #envelopeList.envelope-list { grid-template-columns: 1fr; }
+    .transaction-item { grid-template-columns: 1fr auto; gap: 7px 12px; }
+    .transaction-item span:nth-child(2) { grid-column: 1; }
+    .transaction-item span:nth-child(3) { grid-column: 1; color: var(--muted); }
+    .transaction-item strong { grid-column: 2; grid-row: 1 / span 2; }
+}
