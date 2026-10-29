@@ -6,6 +6,21 @@ const STORAGE_KEY = "monetaTribeData";
 const pageIds = ["loginPage", "createAccountPage", "homePage", "setupPage", "editEnvelopePage", "addEnvelopePage", "transactionPage", "historyPage", "transferPage"];
 const $ = id => document.getElementById(id);
 
+const supabaseClient = window.supabase.createClient(
+    window.MONETATRIBE_SUPABASE_URL,
+    window.MONETATRIBE_SUPABASE_PUBLISHABLE_KEY
+);
+let activeUser = null;
+let cloudBudgetId = null;
+let cloudSaveTimer = null;
+function currentPeriod() {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    return { startDate: iso(start), endDate: iso(end) };
+}
+
 const defaultEnvelopes = [
     { name: "Groceries", budget: 8000, spent: 3500 },
     { name: "Fuel", budget: 4000, spent: 2400 },
@@ -38,9 +53,71 @@ function saveAppData() {
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({ envelopes, transactions, monthlyIncome }));
     } catch (error) {
-        console.error("Unable to save Moneta Tribe data:", error);
-        alert("Your browser could not save the data. Check browser storage settings.");
+        console.error("Unable to save MonetaTribe data locally:", error);
     }
+    if (activeUser) {
+        clearTimeout(cloudSaveTimer);
+        cloudSaveTimer = setTimeout(() => saveCloudData().catch(error => {
+            console.error("Supabase save failed:", error);
+            alert("Cloud save failed. Please check your connection and Supabase table policies before continuing.");
+        }), 700);
+    }
+}
+
+async function loadCloudData() {
+    if (!activeUser) return;
+    const period = currentPeriod();
+    const { data: budget, error: budgetError } = await supabaseClient
+        .from("monthly_budgets").select("*").eq("user_id", activeUser.id).eq("start_date", period.startDate).maybeSingle();
+    if (budgetError) throw budgetError;
+    cloudBudgetId = budget?.id || null;
+    if (!budget) {
+        envelopes = []; transactions = []; monthlyIncome = 0;
+        refreshAll();
+        return;
+    }
+    monthlyIncome = Number(budget.monthly_income) || 0;
+    const { data: dbEnvelopes, error: envError } = await supabaseClient.from("envelopes").select("*").eq("budget_id", budget.id).order("created_at");
+    if (envError) throw envError;
+    const { data: dbTransactions, error: txError } = await supabaseClient.from("transactions").select("*").eq("budget_id", budget.id).order("transaction_date", { ascending: false });
+    if (txError) throw txError;
+    const byId = new Map((dbEnvelopes || []).map(e => [e.id, e]));
+    transactions = (dbTransactions || []).map(t => ({
+        id: t.id, type: t.transaction_type, date: t.transaction_date, amount: Number(t.amount), description: t.description || "",
+        envelope: byId.get(t.envelope_id)?.name || "", source: t.transaction_type === "transfer" ? byId.get(t.envelope_id)?.name : undefined,
+        destination: t.transfer_to_envelope_id ? byId.get(t.transfer_to_envelope_id)?.name : undefined
+    }));
+    envelopes = (dbEnvelopes || []).map(e => ({ name: e.name, budget: Number(e.allocated_budget) || 0, spent: 0 }));
+    transactions.filter(t => t.type === "expense").forEach(t => { const e = envelopes.find(item => item.name === t.envelope); if (e) e.spent += t.amount; });
+    refreshAll();
+}
+
+async function saveCloudData() {
+    if (!activeUser) return;
+    const period = currentPeriod();
+    const budgetPayload = { user_id: activeUser.id, monthly_income: monthlyIncome, start_date: period.startDate, end_date: period.endDate };
+    const { data: budget, error: budgetError } = await supabaseClient.from("monthly_budgets")
+        .upsert(budgetPayload, { onConflict: "user_id,start_date" }).select("id").single();
+    if (budgetError) throw budgetError;
+    cloudBudgetId = budget.id;
+    // Replace this month's rows as one logical snapshot, preserving the current app's simple data model.
+    const { error: deleteTxError } = await supabaseClient.from("transactions").delete().eq("budget_id", cloudBudgetId);
+    if (deleteTxError) throw deleteTxError;
+    const { error: deleteEnvError } = await supabaseClient.from("envelopes").delete().eq("budget_id", cloudBudgetId);
+    if (deleteEnvError) throw deleteEnvError;
+    if (!envelopes.length) return;
+    const rows = envelopes.map(e => ({ user_id: activeUser.id, budget_id: cloudBudgetId, name: e.name, allocated_budget: e.budget }));
+    const { data: savedEnvelopes, error: insertEnvError } = await supabaseClient.from("envelopes").insert(rows).select("id,name");
+    if (insertEnvError) throw insertEnvError;
+    const ids = new Map(savedEnvelopes.map(e => [e.name, e.id]));
+    const txRows = transactions.map(t => {
+        const transfer = t.type === "transfer";
+        const sourceName = transfer ? t.source : t.envelope;
+        return { user_id: activeUser.id, budget_id: cloudBudgetId, envelope_id: ids.get(sourceName),
+            transfer_to_envelope_id: transfer ? ids.get(t.destination) : null, transaction_type: transfer ? "transfer" : "expense",
+            transaction_date: t.date, description: t.description || "", amount: t.amount };
+    }).filter(t => t.envelope_id);
+    if (txRows.length) { const { error } = await supabaseClient.from("transactions").insert(txRows); if (error) throw error; }
 }
 loadAppData();
 
@@ -238,7 +315,7 @@ function renderHistory() {
     setText("historyCount", `${transactions.length} ${transactions.length === 1 ? "transaction" : "transactions"}`);
     setText("historyEmptyMessage", transactions.length ? "" : "No transactions recorded yet.");
     const toggle = $("toggleHistoryManagement");
-    if (toggle) toggle.textContent = historyManageMode ? "Done" : "Edit History";
+    if (toggle) toggle.textContent = historyManageMode ? "Done" : "Edit Transactions";
     const panel = $("historyManagementPanel");
     if (panel) panel.hidden = !historyManageMode;
     [...transactions].sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))).forEach(t => {
@@ -399,59 +476,45 @@ function updateSourceBalance() {
 
 // ==================== FORM HANDLERS ====================
 
-const ACCOUNTS_KEY = "monetaTribeDemoAccounts";
 const REMEMBER_EMAIL_KEY = "monetaTribeRememberedEmail";
-function getDemoAccounts() {
-    try {
-        const accounts = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "[]");
-        return Array.isArray(accounts) ? accounts : [];
-    } catch {
-        return [];
-    }
-}
 
-// Prototype-only accounts: credentials are stored in this browser, NOT securely.
-$("loginForm")?.addEventListener("submit", event => {
+$("loginForm")?.addEventListener("submit", async event => {
     event.preventDefault();
     const email = $("loginEmail").value.trim().toLowerCase();
     const password = $("loginPassword").value;
-    const account = getDemoAccounts().find(item => item.email === email && item.password === password);
-    if (!account) {
-        setMessage("message", "Account not found or password is incorrect. Create an account first, or check your details.", true);
-        return;
-    }
-    clearMessage("message");
+    const button = $("loginForm").querySelector('button[type="submit"]');
+    if (button) button.disabled = true;
+    setMessage("message", "Signing in…", false);
+    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+    if (button) button.disabled = false;
+    if (error) { setMessage("message", error.message); return; }
+    activeUser = data.user;
     if ($("rememberMe")?.checked) localStorage.setItem(REMEMBER_EMAIL_KEY, email);
     else localStorage.removeItem(REMEMBER_EMAIL_KEY);
-    renderDashboard();
-    showPage("homePage");
+    try { await loadCloudData(); clearMessage("message"); showPage("homePage"); }
+    catch (err) { setMessage("message", "Signed in, but cloud data could not load: " + err.message); }
 });
 
 $("createAccount")?.addEventListener("click", () => showPage("createAccountPage"));
 $("backToLogin")?.addEventListener("click", () => showPage("loginPage"));
-$("registerForm")?.addEventListener("submit", event => {
+$("registerForm")?.addEventListener("submit", async event => {
     event.preventDefault();
     const name = $("registerName").value.trim();
     const email = $("registerEmail").value.trim().toLowerCase();
     const password = $("registerPassword").value;
-    const accounts = getDemoAccounts();
-    if (accounts.some(item => item.email === email)) {
-        alert("An account with this email already exists. Please log in.");
-        $("loginEmail").value = email;
-        showPage("loginPage");
-        return;
+    const button = $("registerForm").querySelector('button[type="submit"]');
+    if (button) button.disabled = true;
+    const { data, error } = await supabaseClient.auth.signUp({ email, password, options: { data: { full_name: name } } });
+    if (button) button.disabled = false;
+    if (error) { alert(error.message); return; }
+    if (data.session && data.user) {
+        activeUser = data.user;
+        try { await loadCloudData(); showPage("homePage"); }
+        catch (err) { alert("Account created, but data setup failed: " + err.message); }
+    } else {
+        alert("Account created. Check your email to confirm your account, then log in.");
+        $("loginEmail").value = email; showPage("loginPage");
     }
-    accounts.push({ name, email, password });
-    try {
-        localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
-    } catch (error) {
-        alert("Could not save the account in this browser. Check browser storage settings.");
-        return;
-    }
-    $("loginEmail").value = email;
-    $("loginPassword").value = password;
-    alert("Demo account created. You can now log in. This is a local prototype, not secure authentication.");
-    showPage("loginPage");
 });
 
 const rememberedEmail = localStorage.getItem(REMEMBER_EMAIL_KEY);
@@ -460,9 +523,11 @@ if (rememberedEmail) {
     $("rememberMe").checked = true;
 }
 
-$("logoutButton")?.addEventListener("click", () => showPage("loginPage"));
+$("logoutButton")?.addEventListener("click", async () => {
+    await supabaseClient.auth.signOut();
+    activeUser = null; cloudBudgetId = null; showPage("loginPage");
+});
 $("backToHome")?.addEventListener("click", () => { renderDashboard(); showPage("homePage"); });
-$("historyBackToHome")?.addEventListener("click", () => showPage("homePage"));
 $("transferBackToHome")?.addEventListener("click", () => showPage("homePage"));
 $("cancelAddEnvelope")?.addEventListener("click", () => { clearMessage("addEnvelopeMessage"); showPage("setupPage"); });
 $("cancelTransaction")?.addEventListener("click", () => { clearMessage("transactionMessage"); showPage("homePage"); });
@@ -587,6 +652,13 @@ $("transferForm")?.addEventListener("submit", event => {
 });
 
 
+$("historyBackToHome")?.addEventListener("click", () => {
+    historyManageMode = false;
+    if ($("editTransactionForm")) $("editTransactionForm").hidden = true;
+    renderDashboard();
+    showPage("homePage");
+});
+
 $("toggleHistoryManagement")?.addEventListener("click", () => {
     historyManageMode = !historyManageMode;
     if (!historyManageMode) $("editTransactionForm").hidden = true;
@@ -598,6 +670,12 @@ $("cancelEditTransaction")?.addEventListener("click", () => { $("editTransaction
 $("deleteTransactionsPeriod")?.addEventListener("click", deleteTransactionsByPeriod);
 $("deleteAllTransactions")?.addEventListener("click", deleteAllTransactions);
 
-// Initial view: login page. No data is erased when the page reloads.
+// Restore a valid Supabase session after reload.
 refreshAll();
 showPage("loginPage");
+supabaseClient.auth.getSession().then(async ({ data, error }) => {
+    if (error || !data.session) return;
+    activeUser = data.session.user;
+    try { await loadCloudData(); showPage("homePage"); }
+    catch (err) { console.error("Could not restore cloud data:", err); alert("You are signed in, but your cloud data could not be loaded: " + err.message); }
+});
