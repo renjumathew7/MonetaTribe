@@ -19,9 +19,7 @@
             <label for="loginPassword">Password</label>
             <input type="password" id="loginPassword" required placeholder="Enter your password">
             <label class="remember-me"><input type="checkbox" id="rememberMe"> Remember me</label>
-            <button type="button" id="forgotPasswordButton" class="text-button">
-                Forgot Password?
-            </button>
+            <div class="forgot-password-row"><button type="button" id="forgotPasswordButton" class="text-button">Forgot Password?</button></div>
             <p id="message" role="status"></p>
             <button type="submit" class="primary-button">Login</button>
         </form>
@@ -42,42 +40,30 @@
         </form>
         <button type="button" id="backToLogin" class="text-button">← Back to Login</button>
     </section>
-    
+
     <section id="resetPasswordPage" class="login-card" hidden>
-    <h1>Reset Password</h1>
-    <p>Enter your registered email address.</p>
+        <div class="brand-lockup"><img src="monetatribe-logo.png" alt="MonetaTribe logo"><div><h1>MonetaTribe</h1><p>Your money. Your plan. Your future.</p></div></div>
+        <h2 id="resetPageTitle">Reset your password</h2>
+        <p class="auth-intro" id="resetPageIntro">Enter your registered email address and we’ll send you a secure reset link.</p>
 
-    <form id="forgotPasswordForm">
-        <label for="resetEmail">Email</label>
-        <input type="email" id="resetEmail" required placeholder="Enter your email">
+        <form id="forgotPasswordForm">
+            <label for="resetEmail">Email</label>
+            <input type="email" id="resetEmail" required placeholder="Enter your registered email">
+            <p id="resetMessage" role="status" aria-live="polite"></p>
+            <button type="submit" class="primary-button">Send Reset Link</button>
+        </form>
 
-        <p id="resetMessage" role="status"></p>
+        <form id="newPasswordForm" hidden>
+            <label for="newPassword">New Password</label>
+            <input type="password" id="newPassword" required minlength="6" autocomplete="new-password" placeholder="At least 6 characters">
+            <label for="confirmNewPassword">Confirm New Password</label>
+            <input type="password" id="confirmNewPassword" required minlength="6" autocomplete="new-password" placeholder="Enter the password again">
+            <p id="newPasswordMessage" role="status" aria-live="polite"></p>
+            <button type="submit" class="primary-button">Update Password</button>
+        </form>
 
-        <button type="submit" class="primary-button">
-            Send Reset Link
-        </button>
-    </form>
-
-    <form id="newPasswordForm" hidden>
-        <label for="newPassword">New Password</label>
-        <input type="password" id="newPassword" required minlength="6"
-               placeholder="At least 6 characters">
-
-        <label for="confirmNewPassword">Confirm New Password</label>
-        <input type="password" id="confirmNewPassword" required minlength="6"
-               placeholder="Enter password again">
-
-        <p id="newPasswordMessage" role="status"></p>
-
-        <button type="submit" class="primary-button">
-            Update Password
-        </button>
-    </form>
-
-    <button type="button" id="resetBackToLogin" class="text-button">
-        ← Back to Login
-    </button>
-</section>
+        <button type="button" id="resetBackToLogin" class="text-button">← Back to Login</button>
+    </section>
 
     <section id="homePage" class="dashboard" hidden>
         <header class="dashboard-header">

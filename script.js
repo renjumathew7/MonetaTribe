@@ -11,6 +11,7 @@ const supabaseClient = window.supabase.createClient(
     window.MONETATRIBE_SUPABASE_PUBLISHABLE_KEY
 );
 let activeUser = null;
+let passwordRecoveryActive = window.location.hash.includes("type=recovery");
 let cloudBudgetId = null;
 let cloudSaveTimer = null;
 let isDemoBudget = false;
@@ -498,6 +499,94 @@ function updateSourceBalance() {
     setText("sourceAvailable", money(source.budget - source.spent));
 }
 
+// ==================== PASSWORD RECOVERY ====================
+
+function showNewPasswordForm() {
+    passwordRecoveryActive = true;
+    $("forgotPasswordForm").hidden = true;
+    $("newPasswordForm").hidden = false;
+    $("resetPageTitle").textContent = "Choose a new password";
+    $("resetPageIntro").textContent = "Your recovery link is verified. Enter and confirm your new password.";
+    clearMessage("resetMessage");
+    clearMessage("newPasswordMessage");
+    showPage("resetPasswordPage");
+}
+
+$("forgotPasswordButton")?.addEventListener("click", () => {
+    $("resetEmail").value = $("loginEmail").value.trim();
+    $("forgotPasswordForm").hidden = false;
+    $("newPasswordForm").hidden = true;
+    $("resetPageTitle").textContent = "Reset your password";
+    $("resetPageIntro").textContent = "Enter your registered email address and we’ll send you a secure reset link.";
+    clearMessage("resetMessage");
+    clearMessage("newPasswordMessage");
+    showPage("resetPasswordPage");
+});
+
+$("resetBackToLogin")?.addEventListener("click", () => {
+    // Do not sign out here: the recovery session is needed to authorize a password change.
+    showPage("loginPage");
+});
+
+$("forgotPasswordForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const email = $("resetEmail").value.trim().toLowerCase();
+    const button = $("forgotPasswordForm").querySelector('button[type="submit"]');
+    button.disabled = true;
+    setMessage("resetMessage", "Sending reset link…", false);
+
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+        redirectTo: "https://renjumathew7.github.io/MonetaTribe/"
+    });
+    button.disabled = false;
+
+    if (error) {
+        setMessage("resetMessage", error.message);
+        return;
+    }
+    setMessage("resetMessage", "If an account exists for this email, a password reset link has been sent. Please check your inbox.", false);
+});
+
+// Supabase exchanges the recovery link for a temporary authenticated session.
+// This event must be handled before normal session restoration sends users to the dashboard.
+supabaseClient.auth.onAuthStateChange((event) => {
+    if (event === "PASSWORD_RECOVERY") {
+        passwordRecoveryActive = true;
+        showNewPasswordForm();
+    }
+});
+
+$("newPasswordForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const password = $("newPassword").value;
+    const confirmation = $("confirmNewPassword").value;
+    if (password.length < 6) return setMessage("newPasswordMessage", "Password must contain at least 6 characters.");
+    if (password !== confirmation) return setMessage("newPasswordMessage", "The passwords do not match.");
+
+    const button = $("newPasswordForm").querySelector('button[type="submit"]');
+    button.disabled = true;
+    setMessage("newPasswordMessage", "Updating your password…", false);
+    const { error } = await supabaseClient.auth.updateUser({ password });
+    button.disabled = false;
+
+    if (error) {
+        setMessage("newPasswordMessage", error.message);
+        return;
+    }
+
+    // Password update is complete. End the recovery session and return to login.
+    await supabaseClient.auth.signOut();
+    activeUser = null;
+    cloudBudgetId = null;
+    passwordRecoveryActive = false;
+    $("newPasswordForm").reset();
+    $("forgotPasswordForm").hidden = false;
+    $("newPasswordForm").hidden = true;
+    $("loginEmail").value = $("resetEmail").value.trim().toLowerCase();
+    setMessage("message", "Your password has been updated. Please log in with your new password.", false);
+    showPage("loginPage");
+});
+
 // ==================== FORM HANDLERS ====================
 
 const REMEMBER_EMAIL_KEY = "monetaTribeRememberedEmail";
@@ -694,99 +783,26 @@ $("cancelEditTransaction")?.addEventListener("click", () => { $("editTransaction
 $("deleteTransactionsPeriod")?.addEventListener("click", deleteTransactionsByPeriod);
 $("deleteAllTransactions")?.addEventListener("click", deleteAllTransactions);
 
-// Restore a valid Supabase session after reload.
+// Restore a normal session, but never route a password-recovery session to the dashboard.
 refreshAll();
 showPage("loginPage");
 supabaseClient.auth.getSession().then(async ({ data, error }) => {
-    if (error || !data.session) return;
+    if (error || !data.session) {
+        if (passwordRecoveryActive) showNewPasswordForm();
+        return;
+    }
+
     activeUser = data.session.user;
-    try { await loadCloudData(); showPage("homePage"); }
-    catch (err) { console.error("Could not restore cloud data:", err); alert("You are signed in, but your cloud data could not be loaded: " + err.message); }
-});
-// ==================== PASSWORD RESET ====================
-
-$("forgotPasswordButton")?.addEventListener("click", () => {
-    $("resetEmail").value = $("loginEmail").value.trim();
-    $("forgotPasswordForm").hidden = false;
-    $("newPasswordForm").hidden = true;
-    clearMessage("resetMessage");
-    clearMessage("newPasswordMessage");
-    showPage("resetPasswordPage");
-});
-
-$("resetBackToLogin")?.addEventListener("click", () => {
-    showPage("loginPage");
-});
-
-$("forgotPasswordForm")?.addEventListener("submit", async event => {
-    event.preventDefault();
-
-    const email = $("resetEmail").value.trim().toLowerCase();
-    const button = $("forgotPasswordForm").querySelector('button[type="submit"]');
-
-    button.disabled = true;
-    setMessage("resetMessage", "Sending reset link...", false);
-
-    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
-        redirectTo: "https://renjumathew7.github.io/MonetaTribe/"
-    });
-
-    button.disabled = false;
-
-    if (error) {
-        setMessage("resetMessage", error.message);
+    if (passwordRecoveryActive) {
+        showNewPasswordForm();
         return;
     }
 
-    setMessage("resetMessage", "If an account exists for this email, a password reset link will be sent. Please check your inbox.", false);
-});
-
-// Supabase notifies the app when the user opens the recovery link.
-supabaseClient.auth.onAuthStateChange((event) => {
-    if (event === "PASSWORD_RECOVERY") {
-        $("forgotPasswordForm").hidden = true;
-        $("newPasswordForm").hidden = false;
-        clearMessage("newPasswordMessage");
-        showPage("resetPasswordPage");
+    try {
+        await loadCloudData();
+        showPage("homePage");
+    } catch (err) {
+        console.error("Could not restore cloud data:", err);
+        alert("You are signed in, but your cloud data could not be loaded: " + err.message);
     }
-});
-
-// Save the new password.
-$("newPasswordForm")?.addEventListener("submit", async event => {
-    event.preventDefault();
-
-    const password = $("newPassword").value;
-    const confirmPassword = $("confirmNewPassword").value;
-
-    if (password.length < 6) {
-        return setMessage("newPasswordMessage", "Password must contain at least 6 characters.");
-    }
-
-    if (password !== confirmPassword) {
-        return setMessage("newPasswordMessage", "Passwords do not match.");
-    }
-
-    const button = $("newPasswordForm").querySelector('button[type="submit"]');
-    button.disabled = true;
-    setMessage("newPasswordMessage", "Updating password...", false);
-
-    const { error } = await supabaseClient.auth.updateUser({
-        password: password
-    });
-
-    button.disabled = false;
-
-    if (error) {
-        setMessage("newPasswordMessage", error.message);
-        return;
-    }
-
-    await supabaseClient.auth.signOut();
-
-    $("newPasswordForm").reset();
-    $("forgotPasswordForm").hidden = false;
-    $("newPasswordForm").hidden = true;
-
-    setMessage("message", "Password updated successfully. Please log in with your new password.", false);
-    showPage("loginPage");
 });
