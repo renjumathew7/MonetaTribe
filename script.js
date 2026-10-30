@@ -13,6 +13,7 @@ const supabaseClient = window.supabase.createClient(
 let activeUser = null;
 let cloudBudgetId = null;
 let cloudSaveTimer = null;
+let isDemoBudget = false;
 function currentPeriod() {
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -72,10 +73,31 @@ async function loadCloudData() {
     if (budgetError) throw budgetError;
     cloudBudgetId = budget?.id || null;
     if (!budget) {
-        envelopes = []; transactions = []; monthlyIncome = 0;
-        refreshAll();
+        const demoKey = `monetaTribeDemoShown_${activeUser.id}`;
+        const demoAlreadyShown = localStorage.getItem(demoKey) === "yes";
+        if (!demoAlreadyShown) {
+            // First-time account: load editable examples, with no fictitious transactions.
+            monthlyIncome = 50000;
+            envelopes = [
+                { name: "Groceries", budget: 10000, spent: 0 },
+                { name: "Housing & Bills", budget: 12000, spent: 0 },
+                { name: "Fuel & Transport", budget: 5000, spent: 0 },
+                { name: "Household", budget: 4000, spent: 0 },
+                { name: "Education", budget: 5000, spent: 0 },
+                { name: "Healthcare", budget: 3000, spent: 0 },
+                { name: "Entertainment", budget: 3000, spent: 0 }
+            ];
+            transactions = [];
+            isDemoBudget = true;
+            localStorage.setItem(demoKey, "yes");
+            refreshAll();
+        } else {
+            envelopes = []; transactions = []; monthlyIncome = 0; isDemoBudget = false;
+            refreshAll();
+        }
         return;
     }
+    isDemoBudget = false;
     monthlyIncome = Number(budget.monthly_income) || 0;
     const { data: dbEnvelopes, error: envError } = await supabaseClient.from("envelopes").select("*").eq("budget_id", budget.id).order("created_at");
     if (envError) throw envError;
@@ -166,6 +188,8 @@ function makeEnvelopeActions(envelopeName) {
 }
 
 function renderDashboard() {
+    const demoNotice = $("demoBudgetNotice");
+    if (demoNotice) demoNotice.hidden = !isDemoBudget;
     setText("totalSpent", money(totalSpent()));
     setText("actualBalance", money(actualBalance()));
     setText("envelopeCount", `${envelopes.length} ${envelopes.length === 1 ? "envelope" : "envelopes"}`);

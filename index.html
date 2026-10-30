@@ -11,8 +11,8 @@
 <main class="app-container">
 
     <section class="login-card" id="loginPage">
-        <h1>MonetaTribe</h1>
-        <p>Take control of your money.</p>
+        <div class="brand-lockup"><img src="monetatribe-logo.png" alt="MonetaTribe family savings and growth logo"><div><h1>MonetaTribe</h1><p>Your money. Your plan. Your future.</p></div></div>
+        <h2>Welcome back</h2><p class="auth-intro">Sign in to continue managing your money.</p>
         <form id="loginForm">
             <label for="loginEmail">Email</label>
             <input type="email" id="loginEmail" required placeholder="Enter your email">
@@ -26,8 +26,8 @@
     </section>
 
     <section id="createAccountPage" class="login-card" hidden>
-        <h1>Create Account</h1>
-        <p>Start managing your budget.</p>
+        <div class="brand-lockup"><img src="monetatribe-logo.png" alt="MonetaTribe logo"><div><h1>MonetaTribe</h1><p>Your money. Your plan. Your future.</p></div></div>
+        <h2>Create your account</h2><p class="auth-intro">A clearer way to manage your monthly budget.</p>
         <form id="registerForm">
             <label for="registerName">Full Name</label>
             <input type="text" id="registerName" required placeholder="Your name">
@@ -42,9 +42,10 @@
 
     <section id="homePage" class="dashboard" hidden>
         <header class="dashboard-header">
-            <div><h1>MonetaTribe</h1><p id="budgetPeriod">Monthly Budget</p></div>
+            <div class="dashboard-brand"><img src="monetatribe-logo.png" alt=""><div><h1>MonetaTribe</h1><p id="budgetPeriod">Monthly Budget</p></div></div>
             <button type="button" id="logoutButton" class="text-button">Logout</button>
         </header>
+        <div id="demoBudgetNotice" class="demo-notice" hidden><strong>Sample budget</strong><span>These example envelopes are here to help you get started. Edit the amounts or replace them with your own budget.</span></div>
         <section class="summary-card">
             <p>Total Spent</p>
             <h2 id="totalSpent">₹0</h2>
