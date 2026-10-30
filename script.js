@@ -3,7 +3,7 @@
 const STORAGE_KEY = "monetaTribeData";
 
 // Pages and elements use the IDs from index.html.
-const pageIds = ["loginPage", "createAccountPage", "homePage", "setupPage", "editEnvelopePage", "addEnvelopePage", "transactionPage", "historyPage", "transferPage"];
+const pageIds = ["loginPage", "createAccountPage", "resetPasswordPage", "homePage", "setupPage", "editEnvelopePage", "addEnvelopePage", "transactionPage", "historyPage", "transferPage"];
 const $ = id => document.getElementById(id);
 
 const supabaseClient = window.supabase.createClient(
@@ -702,4 +702,91 @@ supabaseClient.auth.getSession().then(async ({ data, error }) => {
     activeUser = data.session.user;
     try { await loadCloudData(); showPage("homePage"); }
     catch (err) { console.error("Could not restore cloud data:", err); alert("You are signed in, but your cloud data could not be loaded: " + err.message); }
+});
+// ==================== PASSWORD RESET ====================
+
+$("forgotPasswordButton")?.addEventListener("click", () => {
+    $("resetEmail").value = $("loginEmail").value.trim();
+    $("forgotPasswordForm").hidden = false;
+    $("newPasswordForm").hidden = true;
+    clearMessage("resetMessage");
+    clearMessage("newPasswordMessage");
+    showPage("resetPasswordPage");
+});
+
+$("resetBackToLogin")?.addEventListener("click", () => {
+    showPage("loginPage");
+});
+
+$("forgotPasswordForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+
+    const email = $("resetEmail").value.trim().toLowerCase();
+    const button = $("forgotPasswordForm").querySelector('button[type="submit"]');
+
+    button.disabled = true;
+    setMessage("resetMessage", "Sending reset link...", false);
+
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+        redirectTo: "https://renjumathew7.github.io/MonetaTribe/"
+    });
+
+    button.disabled = false;
+
+    if (error) {
+        setMessage("resetMessage", error.message);
+        return;
+    }
+
+    setMessage("resetMessage", "If an account exists for this email, a password reset link will be sent. Please check your inbox.", false);
+});
+
+// Supabase notifies the app when the user opens the recovery link.
+supabaseClient.auth.onAuthStateChange((event) => {
+    if (event === "PASSWORD_RECOVERY") {
+        $("forgotPasswordForm").hidden = true;
+        $("newPasswordForm").hidden = false;
+        clearMessage("newPasswordMessage");
+        showPage("resetPasswordPage");
+    }
+});
+
+// Save the new password.
+$("newPasswordForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+
+    const password = $("newPassword").value;
+    const confirmPassword = $("confirmNewPassword").value;
+
+    if (password.length < 6) {
+        return setMessage("newPasswordMessage", "Password must contain at least 6 characters.");
+    }
+
+    if (password !== confirmPassword) {
+        return setMessage("newPasswordMessage", "Passwords do not match.");
+    }
+
+    const button = $("newPasswordForm").querySelector('button[type="submit"]');
+    button.disabled = true;
+    setMessage("newPasswordMessage", "Updating password...", false);
+
+    const { error } = await supabaseClient.auth.updateUser({
+        password: password
+    });
+
+    button.disabled = false;
+
+    if (error) {
+        setMessage("newPasswordMessage", error.message);
+        return;
+    }
+
+    await supabaseClient.auth.signOut();
+
+    $("newPasswordForm").reset();
+    $("forgotPasswordForm").hidden = false;
+    $("newPasswordForm").hidden = true;
+
+    setMessage("message", "Password updated successfully. Please log in with your new password.", false);
+    showPage("loginPage");
 });
