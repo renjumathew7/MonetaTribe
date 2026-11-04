@@ -12,12 +12,19 @@ const supabaseClient = window.supabase.createClient(
 );
 let activeUser = null;
 let activeFamily = null;
+let activeFamilyRole = null;
+let activeFamilyRestricted = false;
 let budgetProfileMode = "personal";
 let familySchemaAvailable = true;
 let passwordRecoveryActive = window.location.hash.includes("type=recovery");
 let cloudBudgetId = null;
 let cloudSaveTimer = null;
 let cloudSaveInFlight = Promise.resolve();
+const budgetProfileCache = new Map();
+const familyMembersCache = new Map();
+const familyMembersLoading = new Set();
+let familyMembershipLoadedUserId = null;
+const budgetProfileCacheTtlMs = 30000;
 let isDemoBudget = false;
 let budgetStartDate = "";
 let budgetEndDate = "";
@@ -41,10 +48,13 @@ function endOfMonthISO(isoDate) {
     return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
 }
 function isFamilySchemaMissingError(error) {
-    return error?.code === "PGRST205" || /family_members.*schema cache|could not find the table ['"]?public\.family_members/i.test(error?.message || "");
+    return error?.code === "PGRST205" || error?.code === "PGRST204" || /family_members.*schema cache|could not find the table ['"]?public\.family_members|column .*is_restricted.*schema cache/i.test(error?.message || "");
 }
 function familySetupRequiredMessage() {
-    return "Family features are not enabled yet. Run supabase-family-migration.sql in the Supabase Dashboard SQL Editor, then reload the app.";
+    return "Family features are not fully enabled yet. Run supabase-family-migration.sql and the latest supabase-family-members-migration.sql in the Supabase Dashboard SQL Editor, then reload the app.";
+}
+function familyMembersSetupRequiredMessage() {
+    return "Family member listing, restrictions, and Exit Family need setup. Run the latest supabase-family-members-migration.sql in the Supabase Dashboard SQL Editor, then reload the app.";
 }
 function nextBudgetPeriod(previousEndDate, mode = budgetCycleMode, today = localDateISO()) {
     let startDate = addDaysToISO(previousEndDate, 1);
@@ -75,6 +85,7 @@ function initializeBudgetDates(startDate = localDateISO(), duration = 30) {
     budgetEndDate = addDaysToISO(startDate, duration - 1);
 }
 async function rollOverBudget() {
+    if (budgetProfileMode === "family" && !isActiveFamilyAdmin()) return false;
     if (!activeUser || !budgetEndDate || localDateISO() <= budgetEndDate) return false;
     const nextPeriod = nextBudgetPeriod(budgetEndDate);
     const lastEnvelopeBudgets = Object.fromEntries(envelopes.map(envelope => [envelope.name, envelope.budget]));
@@ -95,7 +106,7 @@ async function rollOverBudget() {
 }
 function scheduleBudgetRollover() {
     clearTimeout(budgetRolloverTimer);
-    if (!activeUser || !budgetEndDate) return;
+    if (!activeUser || !budgetEndDate || (budgetProfileMode === "family" && !isActiveFamilyAdmin())) return;
     const nextCycleStart = new Date(`${budgetEndDate}T23:59:59`);
     const delay = Math.max(0, nextCycleStart.getTime() + 1000 - Date.now());
     budgetRolloverTimer = setTimeout(() => {
@@ -142,6 +153,7 @@ function loadAppData() {
 }
 
 function saveAppData() {
+    rememberCurrentBudgetProfile();
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({ envelopes, transactions, monthlyIncome, budgetStartDate, budgetEndDate, budgetCycleMode }));
     } catch (error) {
@@ -159,23 +171,109 @@ function saveAppData() {
     }
 }
 
-async function loadCloudData() {
+function currentBudgetProfileCacheKey() {
+    if (!activeUser) return null;
+    return budgetProfileMode === "family" && activeFamily
+        ? `${activeUser.id}:family:${activeFamily.id}`
+        : `${activeUser.id}:personal`;
+}
+
+function setBudgetProfilePreference(mode, userId = activeUser?.id) {
+    budgetProfileMode = mode === "family" ? "family" : "personal";
+    if (userId) localStorage.setItem(`monetaTribeBudgetProfile_${userId}`, budgetProfileMode);
+}
+
+async function syncBudgetProfilePreference(mode = budgetProfileMode) {
+    if (!activeUser) return;
+    const normalizedMode = mode === "family" ? "family" : "personal";
+    const metadata = { ...(activeUser.user_metadata || {}), monetatribe_default_budget_profile: normalizedMode };
+    const { data, error } = await supabaseClient.auth.updateUser({ data: metadata });
+    if (error) throw error;
+    if (data?.user) activeUser = data.user;
+    setBudgetProfilePreference(normalizedMode);
+}
+
+function isActiveFamilyAdmin() {
+    return Boolean(activeFamily && activeUser && (activeFamilyRole === "admin" || activeFamily.created_by === activeUser.id));
+}
+
+function isRestrictedFamilyMember() {
+    return Boolean(budgetProfileMode === "family" && activeFamily && !isActiveFamilyAdmin() && activeFamilyRestricted);
+}
+
+function familyAdminOnlyMessage() {
+    return "Only the Family Admin can change pockets, budgets, transfers, or transactions.";
+}
+
+function rememberCurrentBudgetProfile() {
+    const key = currentBudgetProfileCacheKey();
+    if (!key) return;
+    budgetProfileCache.set(key, {
+        savedAt: Date.now(), cloudBudgetId, monthlyIncome, budgetStartDate, budgetEndDate,
+        budgetCycleMode, previousEnvelopeBudgets: { ...previousEnvelopeBudgets }, isDemoBudget,
+        envelopes: envelopes.map(envelope => ({ ...envelope })),
+        transactions: transactions.map(transaction => ({ ...transaction }))
+    });
+}
+
+function restoreCachedBudgetProfile(cached) {
+    cloudBudgetId = cached.cloudBudgetId;
+    monthlyIncome = cached.monthlyIncome;
+    budgetStartDate = cached.budgetStartDate;
+    budgetEndDate = cached.budgetEndDate;
+    budgetCycleMode = cached.budgetCycleMode;
+    previousEnvelopeBudgets = { ...cached.previousEnvelopeBudgets };
+    isDemoBudget = cached.isDemoBudget;
+    envelopes = cached.envelopes.map(envelope => ({ ...envelope }));
+    transactions = cached.transactions.map(transaction => ({ ...transaction }));
+}
+
+async function loadCloudData(preferredMode = null) {
     if (!activeUser) return;
     loadBudgetCycleMode();
-    const savedMode = localStorage.getItem(`monetaTribeBudgetProfile_${activeUser.id}`);
-    budgetProfileMode = savedMode === "family" ? "family" : "personal";
-    const { data: memberships, error: membershipError } = await supabaseClient.from("family_members")
-        .select("family_id,families(id,name,invite_code)").eq("user_id", activeUser.id).limit(1);
-    familySchemaAvailable = !membershipError;
-    if (membershipError && !isFamilySchemaMissingError(membershipError)) throw membershipError;
-    if (!familySchemaAvailable) {
-        activeFamily = null;
-        budgetProfileMode = "personal";
-    } else {
-        const familyRelation = memberships?.[0]?.families;
-        activeFamily = Array.isArray(familyRelation) ? (familyRelation[0] || null) : (familyRelation || null);
+    const accountMode = activeUser.user_metadata?.monetatribe_default_budget_profile;
+    const localMode = localStorage.getItem(`monetaTribeBudgetProfile_${activeUser.id}`);
+    const savedMode = preferredMode === "family" || preferredMode === "personal"
+        ? preferredMode
+        : accountMode === "family" || accountMode === "personal" ? accountMode : localMode;
+    setBudgetProfilePreference(savedMode === "family" ? "family" : "personal");
+    if (familyMembershipLoadedUserId !== activeUser.id) {
+        const { data: memberships, error: membershipError } = await supabaseClient.from("family_members")
+            .select("family_id,role,is_restricted,families(id,name,invite_code,created_by)").eq("user_id", activeUser.id).limit(1);
+        familySchemaAvailable = !membershipError;
+        if (membershipError && !isFamilySchemaMissingError(membershipError)) throw membershipError;
+        if (!familySchemaAvailable) {
+            activeFamily = null;
+            activeFamilyRole = null;
+            activeFamilyRestricted = false;
+            setBudgetProfilePreference("personal");
+        } else {
+            const familyRelation = memberships?.[0]?.families;
+            activeFamily = Array.isArray(familyRelation) ? (familyRelation[0] || null) : (familyRelation || null);
+            activeFamilyRole = activeFamily && (activeFamily.created_by === activeUser.id || memberships?.[0]?.role === "admin")
+                ? "admin" : (activeFamily ? "member" : null);
+            activeFamilyRestricted = Boolean(activeFamily && memberships?.[0]?.is_restricted);
+        }
+        familyMembershipLoadedUserId = activeUser.id;
     }
-    if (!activeFamily) budgetProfileMode = "personal";
+    if (!activeFamily) {
+        activeFamilyRole = null;
+        activeFamilyRestricted = false;
+        setBudgetProfilePreference("personal");
+    }
+    if (accountMode !== budgetProfileMode) {
+        try { await syncBudgetProfilePreference(); }
+        catch (error) { console.warn("Could not sync the default budget profile to the account:", error); }
+    }
+    const cacheKey = currentBudgetProfileCacheKey();
+    const cachedProfile = cacheKey ? budgetProfileCache.get(cacheKey) : null;
+    const cachedProfileIsEmptyButSaved = Boolean(cachedProfile?.cloudBudgetId && cachedProfile.envelopes.length === 0);
+    if (cachedProfile && !cachedProfileIsEmptyButSaved && Date.now() - cachedProfile.savedAt < budgetProfileCacheTtlMs) {
+        restoreCachedBudgetProfile(cachedProfile);
+        refreshAll({ persist: false });
+        scheduleBudgetRollover();
+        return;
+    }
     let budgetQuery = supabaseClient.from("monthly_budgets").select("*");
     budgetQuery = budgetProfileMode === "family" && activeFamily
         ? budgetQuery.eq("family_id", activeFamily.id)
@@ -187,6 +285,17 @@ async function loadCloudData() {
     if (budgetError) throw budgetError;
     cloudBudgetId = budget?.id || null;
     if (!budget) {
+        if (isRestrictedFamilyMember()) {
+            initializeBudgetDates();
+            envelopes = [];
+            transactions = [];
+            monthlyIncome = 0;
+            isDemoBudget = false;
+            refreshAll({ persist: false });
+            setText("familyProfileStatus", "The Family Admin needs to set up the shared budget before transactions can be added.");
+            scheduleBudgetRollover();
+            return;
+        }
         initializeBudgetDates();
         previousEnvelopeBudgets = {};
         const demoKey = `monetaTribeDemoShown_${activeUser.id}`;
@@ -206,11 +315,12 @@ async function loadCloudData() {
             transactions = [];
             isDemoBudget = true;
             localStorage.setItem(demoKey, "yes");
-            refreshAll();
+            refreshAll({ persist: false });
         } else {
             envelopes = []; transactions = []; monthlyIncome = 0; isDemoBudget = false;
-            refreshAll();
+            refreshAll({ persist: false });
         }
+        await saveCloudData();
         scheduleBudgetRollover();
         return;
     }
@@ -218,9 +328,13 @@ async function loadCloudData() {
     monthlyIncome = Number(budget.monthly_income) || 0;
     budgetStartDate = budget.start_date;
     budgetEndDate = budget.end_date;
-    const { data: dbEnvelopes, error: envError } = await supabaseClient.from("envelopes").select("*").eq("budget_id", budget.id).order("created_at");
+    const [envelopeResult, transactionResult] = await Promise.all([
+        supabaseClient.from("envelopes").select("*").eq("budget_id", budget.id).order("created_at"),
+        supabaseClient.from("transactions").select("*").eq("budget_id", budget.id).order("transaction_date", { ascending: false })
+    ]);
+    const { data: dbEnvelopes, error: envError } = envelopeResult;
+    const { data: dbTransactions, error: txError } = transactionResult;
     if (envError) throw envError;
-    const { data: dbTransactions, error: txError } = await supabaseClient.from("transactions").select("*").eq("budget_id", budget.id).order("transaction_date", { ascending: false });
     if (txError) throw txError;
     const byId = new Map((dbEnvelopes || []).map(e => [e.id, e]));
     transactions = (dbTransactions || []).map(t => ({
@@ -228,7 +342,7 @@ async function loadCloudData() {
         envelope: byId.get(t.envelope_id)?.name || "", source: t.transaction_type === "transfer" ? byId.get(t.envelope_id)?.name : undefined,
         destination: t.transfer_to_envelope_id ? byId.get(t.transfer_to_envelope_id)?.name : undefined
     }));
-    envelopes = (dbEnvelopes || []).map(e => ({ name: e.name, budget: Number(e.allocated_budget) || 0, spent: 0 }));
+    envelopes = (dbEnvelopes || []).map(e => ({ dbId: e.id, name: e.name, budget: Number(e.allocated_budget) || 0, spent: 0 }));
     transactions.filter(t => t.type === "expense").forEach(t => { const e = envelopes.find(item => item.name === t.envelope); if (e) e.spent += t.amount; });
     let previousQuery = supabaseClient.from("monthly_budgets").select("id")
         .neq("id", cloudBudgetId).lt("end_date", localDateISO());
@@ -248,11 +362,13 @@ async function loadCloudData() {
         previousEnvelopeBudgets = Object.fromEntries((previousEnvelopes || []).map(e => [e.name, Number(e.allocated_budget) || 0]));
     }
     await rollOverBudget();
-    refreshAll();
+    refreshAll({ persist: false });
+    rememberCurrentBudgetProfile();
     scheduleBudgetRollover();
 }
 
 function saveCloudData() {
+    if (isRestrictedFamilyMember()) return Promise.resolve();
     const pendingSave = cloudSaveInFlight.catch(() => {}).then(() => persistCloudDataSnapshot());
     cloudSaveInFlight = pendingSave;
     return pendingSave;
@@ -267,7 +383,7 @@ async function flushPendingCloudSave() {
 }
 
 async function persistCloudDataSnapshot() {
-    if (!activeUser) return;
+    if (!activeUser || isRestrictedFamilyMember()) return;
     const saveUserId = activeUser.id;
     const saveProfileMode = budgetProfileMode;
     const saveFamilyId = activeFamily?.id || null;
@@ -297,7 +413,10 @@ async function persistCloudDataSnapshot() {
     if (budgetError) throw budgetError;
     cloudBudgetId = budget.id;
     // Empty local state can occur during profile loading; never let it erase a saved budget.
-    if (!saveEnvelopes.length) return;
+    if (!saveEnvelopes.length) {
+        rememberCurrentBudgetProfile();
+        return;
+    }
     // Replace the saved rows as one logical snapshot under this account's persistent budget.
     const { error: deleteTxError } = await supabaseClient.from("transactions").delete().eq("budget_id", cloudBudgetId);
     if (deleteTxError) throw deleteTxError;
@@ -307,6 +426,7 @@ async function persistCloudDataSnapshot() {
     const { data: savedEnvelopes, error: insertEnvError } = await supabaseClient.from("envelopes").insert(rows).select("id,name");
     if (insertEnvError) throw insertEnvError;
     const ids = new Map(savedEnvelopes.map(e => [e.name, e.id]));
+    envelopes.forEach(envelope => { envelope.dbId = ids.get(envelope.name); });
     const txRows = saveTransactions.map(t => {
         const transfer = t.type === "transfer";
         const sourceName = transfer ? t.source : t.envelope;
@@ -315,6 +435,7 @@ async function persistCloudDataSnapshot() {
             transaction_date: t.date, description: t.description || "", amount: t.amount };
     }).filter(t => t.envelope_id);
     if (txRows.length) { const { error } = await supabaseClient.from("transactions").insert(txRows); if (error) throw error; }
+    rememberCurrentBudgetProfile();
 }
 loadAppData();
 
@@ -328,6 +449,10 @@ function actualBalance() { return monthlyIncome - totalSpent(); }
 function findEnvelope(name) { return envelopes.find(e => e.name === name); }
 function setText(id, value) { const el = $(id); if (el) el.textContent = value; }
 function showPage(id) {
+    if (isRestrictedFamilyMember() && ["setupPage", "editEnvelopePage", "addEnvelopePage", "transferPage"].includes(id)) {
+        setText("familyProfileStatus", familyAdminOnlyMessage());
+        id = "homePage";
+    }
     pageIds.forEach(pageId => { const el = $(pageId); if (el) el.hidden = pageId !== id; });
     window.scrollTo({ top: 0, behavior: "auto" });
 }
@@ -339,14 +464,14 @@ function setMessage(id, message, isError = true) {
 }
 function clearMessage(id) { setMessage(id, "", false); }
 
-function refreshAll() {
+function refreshAll({ persist = true } = {}) {
     renderDashboard();
     renderSetup();
     renderAddEnvelopeSummary();
     renderTransactionForm();
     renderHistory();
     renderTransferForm();
-    saveAppData();
+    if (persist) saveAppData();
 }
 
 // Envelope editing is managed from Budget Setup.
@@ -388,6 +513,10 @@ function renderDashboard() {
         familyButton.textContent = activeFamily ? activeFamily.name : "Family";
         familyButton.title = activeFamily?.name || "Family budget";
     }
+    const restrictedMember = isRestrictedFamilyMember();
+    document.querySelectorAll("#homePage .dashboard-actions [data-page]").forEach(button => {
+        button.hidden = restrictedMember && ["setupPage", "transferPage"].includes(button.dataset.page);
+    });
     setText("totalSpent", money(totalSpent()));
     setText("actualBalance", money(actualBalance()));
     setText("envelopeCount", `${envelopes.length} ${envelopes.length === 1 ? "pocket" : "pockets"}`);
@@ -478,14 +607,118 @@ function renderProfile() {
     const hasFamily = Boolean(activeFamily);
     $("familyForms").hidden = hasFamily || !familySchemaAvailable;
     $("familyDetails").hidden = !hasFamily;
+    $("deleteFamilyButton").hidden = !hasFamily || !isActiveFamilyAdmin();
     setText("familyProfileStatus", !familySchemaAvailable
         ? familySetupRequiredMessage()
         : hasFamily
-            ? "Your family shares a separate budget profile. Switch profiles from the dashboard header."
+            ? `${isActiveFamilyAdmin() ? "You are the Family Admin." : (activeFamilyRestricted ? "You can add expense transactions only." : "You can manage the shared budget.")} Switch profiles from the dashboard header.`
             : "Create a family budget or join one with a member’s six digit code.");
     if (hasFamily) {
         setText("familyNameDisplay", activeFamily.name);
         setText("familyCodeDisplay", activeFamily.invite_code);
+        loadFamilyMembers();
+    }
+}
+
+function renderFamilyMemberRows(container, members) {
+    if (!container) return;
+    container.replaceChildren();
+    if (!members.length) {
+        container.textContent = "No family members found.";
+        return;
+    }
+    members.forEach(member => {
+        const row = document.createElement("div");
+        row.className = "family-member-row";
+        const avatar = document.createElement("span");
+        avatar.className = "family-member-avatar";
+        avatar.setAttribute("aria-hidden", "true");
+        avatar.textContent = String(member.display_name || "M").trim().split(/\s+/).slice(0, 2).map(part => part[0]?.toUpperCase() || "").join("");
+        const info = document.createElement("span");
+        info.className = "family-member-info";
+        const name = document.createElement("strong");
+        const roleLabel = member.role === "admin" ? " · Admin" : "";
+        name.textContent = `${member.display_name || "Family member"}${member.member_user_id === activeUser?.id ? " (You)" : ""}${roleLabel}`;
+        const joined = document.createElement("small");
+        const joinedAt = member.joined_at ? new Date(member.joined_at) : null;
+        joined.textContent = joinedAt && !Number.isNaN(joinedAt.getTime())
+            ? `Joined ${new Intl.DateTimeFormat("en-IN", { dateStyle: "medium" }).format(joinedAt)}`
+            : "Family member";
+        info.append(name, joined);
+        row.append(avatar, info);
+        if (isActiveFamilyAdmin() && member.role !== "admin") {
+            const restrictionButton = document.createElement("button");
+            restrictionButton.type = "button";
+            restrictionButton.className = "envelope-edit-button family-restriction-button";
+            restrictionButton.textContent = member.is_restricted ? "Allow Changes" : "Restrict";
+            restrictionButton.setAttribute("aria-label", `${member.is_restricted ? "Allow changes for" : "Restrict"} ${member.display_name || "family member"}`);
+            restrictionButton.addEventListener("click", () => setFamilyMemberRestriction(member, !member.is_restricted, restrictionButton));
+            row.append(restrictionButton);
+        } else if (member.role !== "admin") {
+            const status = document.createElement("small");
+            status.className = "family-restriction-status";
+            status.textContent = member.is_restricted ? "Restricted · Add transactions only" : "Full access";
+            row.append(status);
+        }
+        container.append(row);
+    });
+}
+
+async function setFamilyMemberRestriction(member, restricted, button) {
+    if (!isActiveFamilyAdmin() || !activeFamily || member.member_user_id === activeUser?.id) return;
+    button.disabled = true;
+    try {
+        const { error } = await supabaseClient.rpc("set_family_member_restriction", {
+            target_user_id: member.member_user_id,
+            restrict_member: restricted
+        });
+        if (error) throw new Error(error.code === "PGRST202" ? familyMembersSetupRequiredMessage() : error.message);
+        const cached = familyMembersCache.get(activeFamily.id);
+        if (cached) {
+            const members = cached.members.map(item => item.member_user_id === member.member_user_id ? { ...item, is_restricted: restricted } : item);
+            familyMembersCache.set(activeFamily.id, { savedAt: Date.now(), members });
+            [$("familyMemberList")].filter(Boolean).forEach(container => renderFamilyMemberRows(container, members));
+        }
+    } catch (error) {
+        alert(`Member access could not be updated: ${error.message}`);
+        button.disabled = false;
+    }
+}
+
+async function loadFamilyMembers() {
+    if (!activeFamily) return;
+    const familyId = activeFamily.id;
+    const containers = [$("familyMemberList")].filter(Boolean);
+    const cached = familyMembersCache.get(familyId);
+    if (cached && Date.now() - cached.savedAt < 60000) {
+        containers.forEach(container => renderFamilyMemberRows(container, cached.members));
+        setText("familyMemberCount", `${cached.members.length} ${cached.members.length === 1 ? "member" : "members"}`);
+        return;
+    }
+    if (familyMembersLoading.has(familyId)) return;
+    familyMembersLoading.add(familyId);
+    containers.forEach(container => { container.textContent = "Loading family members…"; });
+    try {
+        const { data, error } = await supabaseClient.rpc("get_family_members");
+        if (familyId !== activeFamily?.id) return;
+        if (error) {
+            const message = error.code === "PGRST202" ? familyMembersSetupRequiredMessage() : `Could not load family members: ${error.message}`;
+            containers.forEach(container => { container.textContent = message; });
+            return;
+        }
+        const members = Array.isArray(data) ? data : [];
+        familyMembersCache.set(familyId, { savedAt: Date.now(), members });
+        const self = members.find(member => member.member_user_id === activeUser?.id);
+        if (self) {
+            activeFamilyRole = self.role;
+            activeFamilyRestricted = Boolean(self.is_restricted);
+        }
+        containers.forEach(container => renderFamilyMemberRows(container, members));
+        setText("familyMemberCount", `${members.length} ${members.length === 1 ? "member" : "members"}`);
+    } catch (error) {
+        containers.forEach(container => { container.textContent = `Could not load family members: ${error.message}`; });
+    } finally {
+        familyMembersLoading.delete(familyId);
     }
 }
 
@@ -603,6 +836,11 @@ function renderTransactionForm() {
 function renderHistory() {
     const list = $("transactionHistoryList");
     if (!list) return;
+    const restrictedMember = isRestrictedFamilyMember();
+    if (restrictedMember) {
+        historyManageMode = false;
+        archiveManageMode = false;
+    }
     list.replaceChildren();
     const archiveFrom = $("previousTransactionsFrom")?.value || "";
     const archiveTo = $("previousTransactionsTo")?.value || "";
@@ -613,7 +851,7 @@ function renderHistory() {
     setText("historyEmptyMessage", invalidArchiveRange ? "From date must be on or before To date." : shownTransactions.length ? "" : (historyViewingArchive ? (archivedTransactions.length ? "No previous transactions match these dates." : "No previous transactions have been recorded.") : "No transactions recorded yet."));
     const toggle = $("toggleHistoryManagement");
     if (toggle) toggle.textContent = historyManageMode ? "Done" : "Edit Transactions";
-    if (toggle) toggle.hidden = historyViewingArchive;
+    if (toggle) toggle.hidden = historyViewingArchive || restrictedMember;
     const previousToggle = $("togglePreviousTransactions");
     if (previousToggle) previousToggle.textContent = historyViewingArchive ? "View Current Transactions" : "Previous Transactions";
     const archiveFilters = $("previousTransactionsFilters");
@@ -622,10 +860,11 @@ function renderHistory() {
     if (archiveActions) archiveActions.hidden = !historyViewingArchive;
     const archiveManageToggle = $("togglePreviousTransactionsManagement");
     if (archiveManageToggle) archiveManageToggle.textContent = archiveManageMode ? "Done Editing Previous Transactions" : "Edit Previous Transactions";
+    if (archiveManageToggle) archiveManageToggle.hidden = restrictedMember;
     const deleteAllArchiveButton = $("deleteAllPreviousTransactions");
-    if (deleteAllArchiveButton) deleteAllArchiveButton.hidden = !archiveManageMode || archivedTransactions.length === 0;
+    if (deleteAllArchiveButton) deleteAllArchiveButton.hidden = restrictedMember || !archiveManageMode || archivedTransactions.length === 0;
     const panel = $("historyManagementPanel");
-    if (panel) panel.hidden = !historyManageMode || historyViewingArchive;
+    if (panel) panel.hidden = restrictedMember || !historyManageMode || historyViewingArchive;
     const editForm = $("editTransactionForm");
     if (historyViewingArchive && editForm) editForm.hidden = true;
     [...shownTransactions].sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))).forEach(t => {
@@ -972,8 +1211,14 @@ $("newPasswordForm")?.addEventListener("submit", async event => {
 
     // Password update is complete. End the recovery session and return to login.
     await supabaseClient.auth.signOut();
+    budgetProfileCache.clear();
+    familyMembersCache.clear();
+    familyMembersLoading.clear();
+    familyMembershipLoadedUserId = null;
     activeUser = null;
     activeFamily = null;
+    activeFamilyRole = null;
+    activeFamilyRestricted = false;
     budgetProfileMode = "personal";
     cloudBudgetId = null;
     passwordRecoveryActive = false;
@@ -1049,11 +1294,71 @@ $("logoutButton")?.addEventListener("click", async () => {
     await supabaseClient.auth.signOut();
     localStorage.removeItem(KEEP_LOGGED_IN_KEY);
     $("keepLoggedIn").checked = false;
-    activeUser = null; activeFamily = null; budgetProfileMode = "personal"; cloudBudgetId = null; historyViewingArchive = false; archivedTransactions = []; archivedBudgetIds = []; archiveManageMode = false; showPage("loginPage");
+    budgetProfileCache.clear();
+    familyMembersCache.clear();
+    familyMembersLoading.clear();
+    familyMembershipLoadedUserId = null;
+    // Reset only in-memory UI state; keep the per-user preference for the next sign-in.
+    activeUser = null; activeFamily = null; activeFamilyRole = null; activeFamilyRestricted = false; budgetProfileMode = "personal"; cloudBudgetId = null; historyViewingArchive = false; archivedTransactions = []; archivedBudgetIds = []; archiveManageMode = false; showPage("loginPage");
 });
 $("backToHome")?.addEventListener("click", () => { renderDashboard(); showPage("homePage"); });
 $("viewProfileButton")?.addEventListener("click", () => { renderProfile(); showPage("profilePage"); });
 $("profileBackToHome")?.addEventListener("click", () => showPage("homePage"));
+$("exitFamilyButton")?.addEventListener("click", async () => {
+    if (!activeFamily || !activeUser) return;
+    const family = activeFamily;
+    if (!confirm(`Exit “${family.name}”? Your personal budget will remain, and the family budget will stay available to its other members.`)) return;
+    const button = $("exitFamilyButton");
+    button.disabled = true;
+    try {
+        await flushPendingCloudSave();
+        const { error } = await supabaseClient.rpc("leave_family");
+        if (error) throw new Error(error.code === "PGRST202" ? familyMembersSetupRequiredMessage() : error.message);
+        familyMembersCache.delete(family.id);
+        budgetProfileCache.delete(`${activeUser.id}:family:${family.id}`);
+        activeFamily = null;
+        activeFamilyRole = null;
+        activeFamilyRestricted = false;
+        setBudgetProfilePreference("personal");
+        familyMembershipLoadedUserId = activeUser.id;
+        await loadCloudData();
+        renderProfile();
+        showPage("profilePage");
+    } catch (error) {
+        console.error("Could not exit family:", error);
+        setText("familyProfileStatus", `Could not exit the family: ${error.message}`);
+    } finally {
+        if ($("exitFamilyButton")) $("exitFamilyButton").disabled = false;
+    }
+});
+$("deleteFamilyButton")?.addEventListener("click", async () => {
+    if (!activeFamily || !activeUser || !isActiveFamilyAdmin()) return;
+    const family = activeFamily;
+    const confirmed = confirm(`Permanently delete “${family.name}” and all of its shared budgets, pockets, and transactions? This cannot be undone. Personal budgets will remain.`);
+    if (!confirmed) return;
+    const button = $("deleteFamilyButton");
+    button.disabled = true;
+    try {
+        await flushPendingCloudSave();
+        const { error } = await supabaseClient.rpc("delete_family");
+        if (error) throw new Error(error.code === "PGRST202" ? familyMembersSetupRequiredMessage() : error.message);
+        familyMembersCache.delete(family.id);
+        budgetProfileCache.delete(`${activeUser.id}:family:${family.id}`);
+        activeFamily = null;
+        activeFamilyRole = null;
+        activeFamilyRestricted = false;
+        familyMembershipLoadedUserId = activeUser.id;
+        setBudgetProfilePreference("personal");
+        await loadCloudData();
+        renderProfile();
+        showPage("profilePage");
+    } catch (error) {
+        console.error("Could not delete family:", error);
+        setText("familyProfileStatus", `Family could not be deleted: ${error.message}`);
+    } finally {
+        if ($("deleteFamilyButton")) $("deleteFamilyButton").disabled = false;
+    }
+});
 async function switchBudgetProfile(mode) {
     if (mode === "family" && !activeFamily) return;
     if (budgetProfileMode === mode) return;
@@ -1062,18 +1367,22 @@ async function switchBudgetProfile(mode) {
         alert("The current budget could not be saved, so the profile was not switched: " + error.message);
         return;
     }
-    budgetProfileMode = mode;
+    const previousMode = budgetProfileMode;
+    setBudgetProfilePreference(mode);
     historyViewingArchive = false;
     archivedTransactions = [];
     archivedBudgetIds = [];
     archiveManageMode = false;
-    if (activeUser) localStorage.setItem(`monetaTribeBudgetProfile_${activeUser.id}`, mode);
     try {
-        await loadCloudData();
+        await syncBudgetProfilePreference(mode);
+        await loadCloudData(mode);
         await flushPendingCloudSave();
         showPage("homePage");
     } catch (error) {
         console.error("Could not switch budget profile:", error);
+        setBudgetProfilePreference(previousMode);
+        try { await syncBudgetProfilePreference(previousMode); } catch (syncError) { console.error("Could not restore the previous profile preference:", syncError); }
+        try { await loadCloudData(previousMode); } catch (reloadError) { console.error("Could not restore the previous budget profile:", reloadError); }
         alert("The selected budget profile could not be loaded: " + error.message);
     }
 }
@@ -1097,9 +1406,11 @@ $("createFamilyForm")?.addEventListener("submit", async event => {
     const created = Array.isArray(data) ? data[0] : data;
     if (!created?.family_id) return setMessage("createFamilyMessage", "The family was created, but its details could not be loaded. Please reopen your profile.");
     activeFamily = { id: created.family_id, name: created.family_name, invite_code: created.invite_code };
-    budgetProfileMode = "family";
-    localStorage.setItem(`monetaTribeBudgetProfile_${activeUser.id}`, "family");
-    try { await loadCloudData(); await flushPendingCloudSave(); }
+    activeFamilyRole = "admin";
+    activeFamilyRestricted = false;
+    familyMembershipLoadedUserId = activeUser.id;
+    setBudgetProfilePreference("family");
+    try { await loadCloudData("family"); await flushPendingCloudSave(); }
     catch (err) { setMessage("createFamilyMessage", "Family created, but the shared budget could not load: " + err.message); }
     renderProfile();
     showPage("profilePage");
@@ -1122,9 +1433,11 @@ $("joinFamilyForm")?.addEventListener("submit", async event => {
     const joined = Array.isArray(data) ? data[0] : data;
     if (!joined?.family_id) return setMessage("joinFamilyMessage", "The family could not be found. Check the code and try again.");
     activeFamily = { id: joined.family_id, name: joined.family_name, invite_code: joined.invite_code };
-    budgetProfileMode = "family";
-    localStorage.setItem(`monetaTribeBudgetProfile_${activeUser.id}`, "family");
-    try { await loadCloudData(); await flushPendingCloudSave(); showPage("homePage"); }
+    activeFamilyRole = "member";
+    activeFamilyRestricted = false;
+    familyMembershipLoadedUserId = activeUser.id;
+    setBudgetProfilePreference("family");
+    try { await loadCloudData("family"); await flushPendingCloudSave(); showPage("homePage"); }
     catch (err) { setMessage("joinFamilyMessage", "You joined the family, but its shared budget could not load: " + err.message); }
 });
 $("editProfileButton")?.addEventListener("click", () => {
@@ -1222,7 +1535,7 @@ $("budgetCycleMode")?.addEventListener("change", async () => {
     budgetCycleMode = selectedMode;
     if (activeUser) {
         localStorage.setItem(`monetaTribeCycleMode_${activeUser.id}`, budgetCycleMode);
-        const { data, error } = await supabaseClient.auth.updateUser({ data: { monetatribe_budget_cycle_mode: budgetCycleMode } });
+        const { data, error } = await supabaseClient.auth.updateUser({ data: { ...(activeUser.user_metadata || {}), monetatribe_budget_cycle_mode: budgetCycleMode } });
         if (error) setMessage("budgetPeriodMessage", "The next-period preference could not be synced to your account.");
         else activeUser = data.user;
     }
@@ -1255,7 +1568,7 @@ function submitEnvelope(addAnother = false) {
 $("addEnvelopeForm")?.addEventListener("submit", event => { event.preventDefault(); submitEnvelope(false); });
 $("addAnotherEnvelope")?.addEventListener("click", () => submitEnvelope(true));
 
-function saveTransaction(addAnother = false) {
+async function saveTransaction(addAnother = false) {
     const envelope = findEnvelope($("transactionEnvelope")?.value);
     const amount = Number($("transactionAmount")?.value);
     const description = $("transactionDescription")?.value.trim();
@@ -1266,9 +1579,29 @@ function saveTransaction(addAnother = false) {
     if (!date) return setMessage("transactionMessage", "Choose a date.");
     const keepEnvelope = envelope.name;
     const keepDate = date;
+    let transactionId = Date.now();
+    if (isRestrictedFamilyMember()) {
+        if (!cloudBudgetId || !envelope.dbId) return setMessage("transactionMessage", "The shared budget is still loading. Please try again shortly.");
+        const submitButtons = [$('transactionForm')?.querySelector('button[type="submit"]'), $("saveAndAddNewTransaction")].filter(Boolean);
+        submitButtons.forEach(button => { button.disabled = true; });
+        setMessage("transactionMessage", "Saving transaction…", false);
+        const { data, error } = await supabaseClient.from("transactions").insert({
+            user_id: activeUser.id,
+            budget_id: cloudBudgetId,
+            envelope_id: envelope.dbId,
+            transaction_type: "expense",
+            transaction_date: date,
+            description,
+            amount
+        }).select("id").single();
+        submitButtons.forEach(button => { button.disabled = false; });
+        if (error) return setMessage("transactionMessage", `Transaction could not be saved: ${error.message}`);
+        transactionId = data.id;
+    }
     envelope.spent += amount;
-    transactions.push({ id: Date.now(), type: "expense", envelope: envelope.name, amount, description, date });
-    refreshAll();
+    transactions.push({ id: transactionId, type: "expense", envelope: envelope.name, amount, description, date });
+    refreshAll({ persist: !isRestrictedFamilyMember() });
+    if (isRestrictedFamilyMember()) rememberCurrentBudgetProfile();
     $("transactionForm").reset();
     renderTransactionForm();
     if (addAnother) {
@@ -1384,8 +1717,14 @@ supabaseClient.auth.getSession().then(async ({ data, error }) => {
 
     if (localStorage.getItem(KEEP_LOGGED_IN_KEY) !== "yes") {
         await supabaseClient.auth.signOut();
+        budgetProfileCache.clear();
+        familyMembersCache.clear();
+        familyMembersLoading.clear();
+        familyMembershipLoadedUserId = null;
         activeUser = null;
         activeFamily = null;
+        activeFamilyRole = null;
+        activeFamilyRestricted = false;
         budgetProfileMode = "personal";
         cloudBudgetId = null;
         showPage("loginPage");

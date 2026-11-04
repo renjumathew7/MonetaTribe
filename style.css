@@ -23,7 +23,7 @@ label{display:block;margin:17px 0 7px;font-size:13px;font-weight:700;color:#3653
 /* Password recovery screen */
 .forgot-password-row{display:flex;justify-content:flex-end;margin:-7px 0 10px}
 #forgotPasswordForm>.primary-button,#newPasswordForm>.primary-button{width:100%;margin-top:14px}
-.budget-profile-toggle{display:flex;gap:4px;margin-bottom:5px;padding:3px;border-radius:11px;background:#edf3ee}
+.budget-profile-toggle{display:flex;gap:4px;margin-top:7px;padding:3px;border-radius:11px;background:#edf3ee}
 .budget-profile-toggle button{min-height:32px;padding:6px 10px;font-size:11px}
 .budget-profile-toggle button[aria-pressed="true"]{background:var(--green);border-color:var(--green);color:#fff}
 .family-management{margin-top:24px;padding-top:20px;border-top:1px solid var(--line)}
@@ -34,7 +34,18 @@ label{display:block;margin:17px 0 7px;font-size:13px;font-weight:700;color:#3653
 .family-forms button{width:100%;margin-top:9px}
 .family-details p{margin:4px 0}
 .family-details strong{overflow-wrap:anywhere}
+.family-details h3{margin:18px 0 8px;font:700 14px Manrope,sans-serif}
+.family-details>#exitFamilyButton,.family-details>#deleteFamilyButton{display:block;width:100%;margin-top:12px}
+.family-member-list{display:flex;flex-wrap:wrap;gap:10px}
+.family-member-row{display:flex;align-items:center;gap:9px;min-width:190px;padding:8px 11px;border:1px solid var(--line);border-radius:12px;background:#fff}
+.family-member-avatar{width:34px;height:34px;display:grid;place-items:center;flex:none;border-radius:50%;background:var(--green-soft);color:var(--green);font-size:12px;font-weight:800}
+.family-member-info{display:flex;flex-direction:column;min-width:0}
+.family-member-info strong{font-size:12px;overflow-wrap:anywhere}
+.family-member-info small{color:var(--muted);font-size:10px}
+.family-restriction-button{flex:none;white-space:nowrap}
+.family-restriction-status{flex:none;color:var(--muted);font-size:10px}
 @media(max-width:520px){.family-forms{grid-template-columns:1fr}.budget-profile-toggle{flex-wrap:wrap;justify-content:center}.budget-profile-toggle button{font-size:10px;padding-inline:7px}}
+@media(max-width:520px){.family-member-row{width:100%;flex-wrap:wrap}.family-restriction-button{margin-left:43px}}
 #resetBackToLogin{display:inline-block;margin-top:20px}
 #resetMessage,#newPasswordMessage{min-height:20px;margin:12px 0 4px;font-size:13px;color:var(--muted)}
 .envelope-card.envelope-over-budget{border-color:#f0aaa6;background:#fff7f6}

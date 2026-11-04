@@ -84,14 +84,14 @@
         <header class="dashboard-header">
             <div class="dashboard-brand"><img src="monetatribe-mark.png" alt=""><div><h1>MonetaTribe</h1><p id="budgetPeriod">Monthly Budget</p></div></div>
             <div class="user-profile-shortcut">
-                <div id="budgetProfileToggle" class="budget-profile-toggle" hidden>
-                    <button type="button" id="personalBudgetButton" class="secondary-button" aria-pressed="true">Personal</button>
-                    <button type="button" id="familyBudgetButton" class="secondary-button" aria-pressed="false">Family</button>
-                </div>
                 <button type="button" id="viewProfileButton" class="user-avatar-button" aria-label="Open profile" title="Open profile">
                     <img id="dashboardUserAvatar" src="avatars/adult-man.svg" alt="">
                 </button>
                 <span id="dashboardUserLastName" class="user-avatar-name">User</span>
+                <div id="budgetProfileToggle" class="budget-profile-toggle" hidden>
+                    <button type="button" id="personalBudgetButton" class="secondary-button" aria-pressed="true">Personal</button>
+                    <button type="button" id="familyBudgetButton" class="secondary-button" aria-pressed="false">Family</button>
+                </div>
             </div>
         </header>
         <div id="demoBudgetNotice" class="demo-notice" hidden><strong>Sample budget</strong><span>These example pockets are here to help you get started. Edit the amounts or replace them with your own budget.</span></div>
@@ -140,6 +140,10 @@
                     <p>Family: <strong id="familyNameDisplay"></strong></p>
                     <p>Join code: <strong id="familyCodeDisplay"></strong></p>
                     <p class="available-balance-note">Share this code with the people you want to add to this family budget.</p>
+                    <h3>Family Members</h3>
+                    <div id="familyMemberList" class="family-member-list" aria-live="polite"></div>
+                    <button type="button" id="exitFamilyButton" class="danger-button">Exit Family</button>
+                    <button type="button" id="deleteFamilyButton" class="danger-button" hidden>Delete Family</button>
                 </div>
                 <div id="familyForms" class="family-forms">
                     <form id="createFamilyForm">
