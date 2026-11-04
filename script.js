@@ -3,7 +3,7 @@
 const STORAGE_KEY = "monetaTribeData";
 
 // Pages and elements use the IDs from index.html.
-const pageIds = ["loginPage", "createAccountPage", "resetPasswordPage", "homePage", "setupPage", "editEnvelopePage", "addEnvelopePage", "transactionPage", "historyPage", "transferPage"];
+const pageIds = ["sessionLoadingPage", "loginPage", "createAccountPage", "resetPasswordPage", "homePage", "profilePage", "setupPage", "editEnvelopePage", "addEnvelopePage", "transactionPage", "historyPage", "transferPage"];
 const $ = id => document.getElementById(id);
 
 const supabaseClient = window.supabase.createClient(
@@ -11,18 +11,100 @@ const supabaseClient = window.supabase.createClient(
     window.MONETATRIBE_SUPABASE_PUBLISHABLE_KEY
 );
 let activeUser = null;
+let activeFamily = null;
+let budgetProfileMode = "personal";
+let familySchemaAvailable = true;
 let passwordRecoveryActive = window.location.hash.includes("type=recovery");
 let cloudBudgetId = null;
 let cloudSaveTimer = null;
+let cloudSaveInFlight = Promise.resolve();
 let isDemoBudget = false;
-function currentPeriod() {
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-    return { startDate: iso(start), endDate: iso(end) };
+let budgetStartDate = "";
+let budgetEndDate = "";
+let budgetCycleMode = "30days";
+let previousEnvelopeBudgets = {};
+let historyViewingArchive = false;
+let archivedTransactions = [];
+let archivedBudgetIds = [];
+let archiveManageMode = false;
+let budgetRolloverTimer = null;
+function localDateISO(date = new Date()) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
-
+function addDaysToISO(isoDate, days) {
+    const date = new Date(`${isoDate}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+}
+function endOfMonthISO(isoDate) {
+    const date = new Date(`${isoDate}T00:00:00Z`);
+    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+}
+function isFamilySchemaMissingError(error) {
+    return error?.code === "PGRST205" || /family_members.*schema cache|could not find the table ['"]?public\.family_members/i.test(error?.message || "");
+}
+function familySetupRequiredMessage() {
+    return "Family features are not enabled yet. Run supabase-family-migration.sql in the Supabase Dashboard SQL Editor, then reload the app.";
+}
+function nextBudgetPeriod(previousEndDate, mode = budgetCycleMode, today = localDateISO()) {
+    let startDate = addDaysToISO(previousEndDate, 1);
+    if (mode === "monthEnd") {
+        let endDate = endOfMonthISO(startDate);
+        while (endDate < today) {
+            startDate = addDaysToISO(endDate, 1);
+            endDate = endOfMonthISO(startDate);
+        }
+        return { startDate, endDate };
+    }
+    let endDate = addDaysToISO(startDate, 29);
+    while (endDate < today) {
+        startDate = addDaysToISO(startDate, 30);
+        endDate = addDaysToISO(startDate, 29);
+    }
+    return { startDate, endDate };
+}
+function loadBudgetCycleMode() {
+    if (!activeUser) return;
+    const saved = localStorage.getItem(`monetaTribeCycleMode_${activeUser.id}`);
+    const cloudMode = activeUser.user_metadata?.monetatribe_budget_cycle_mode;
+    const mode = cloudMode || saved;
+    budgetCycleMode = mode === "monthEnd" ? "monthEnd" : "30days";
+}
+function initializeBudgetDates(startDate = localDateISO(), duration = 30) {
+    budgetStartDate = startDate;
+    budgetEndDate = addDaysToISO(startDate, duration - 1);
+}
+async function rollOverBudget() {
+    if (!activeUser || !budgetEndDate || localDateISO() <= budgetEndDate) return false;
+    const nextPeriod = nextBudgetPeriod(budgetEndDate);
+    const lastEnvelopeBudgets = Object.fromEntries(envelopes.map(envelope => [envelope.name, envelope.budget]));
+    const { data: nextBudget, error } = await supabaseClient.from("monthly_budgets")
+        .insert({ user_id: activeUser.id, ...(familySchemaAvailable ? { family_id: budgetProfileMode === "family" ? activeFamily?.id : null } : {}), monthly_income: 0, start_date: nextPeriod.startDate, end_date: nextPeriod.endDate })
+        .select("id").single();
+    if (error) throw error;
+    budgetStartDate = nextPeriod.startDate;
+    budgetEndDate = nextPeriod.endDate;
+    previousEnvelopeBudgets = lastEnvelopeBudgets;
+    monthlyIncome = 0;
+    envelopes = envelopes.map(envelope => ({ ...envelope, budget: 0, spent: 0 }));
+    cloudBudgetId = nextBudget.id;
+    transactions = [];
+    await saveCloudData();
+    refreshAll();
+    return true;
+}
+function scheduleBudgetRollover() {
+    clearTimeout(budgetRolloverTimer);
+    if (!activeUser || !budgetEndDate) return;
+    const nextCycleStart = new Date(`${budgetEndDate}T23:59:59`);
+    const delay = Math.max(0, nextCycleStart.getTime() + 1000 - Date.now());
+    budgetRolloverTimer = setTimeout(() => {
+        rollOverBudget().then(scheduleBudgetRollover).catch(error => {
+            console.error("Automatic budget rollover failed:", error);
+            alert("The new budget period could not be started. Please check your connection and try again.");
+        });
+    }, Math.min(delay, 2147483000));
+}
 const defaultEnvelopes = [
     { name: "Groceries", budget: 8000, spent: 3500 },
     { name: "Fuel", budget: 4000, spent: 2400 },
@@ -43,6 +125,14 @@ function loadAppData() {
         if (Array.isArray(data.envelopes)) envelopes = data.envelopes;
         if (Array.isArray(data.transactions)) transactions = data.transactions;
         if (Number.isFinite(data.monthlyIncome)) monthlyIncome = data.monthlyIncome;
+        if (data.budgetCycleMode === "30days" || data.budgetCycleMode === "monthEnd") budgetCycleMode = data.budgetCycleMode;
+        if (typeof data.budgetStartDate === "string" && typeof data.budgetEndDate === "string") {
+            budgetStartDate = data.budgetStartDate;
+            budgetEndDate = data.budgetEndDate;
+        } else {
+            const legacyDuration = Number.isInteger(data.budgetDurationDays) && data.budgetDurationDays >= 1 && data.budgetDurationDays <= 365 ? data.budgetDurationDays : 30;
+            initializeBudgetDates(localDateISO(), legacyDuration);
+        }
         envelopes = envelopes.filter(e => e && typeof e.name === "string")
             .map(e => ({ name: e.name, budget: Number(e.budget) || 0, spent: Number(e.spent) || 0 }));
         transactions = transactions.filter(t => t && typeof t === "object");
@@ -53,27 +143,52 @@ function loadAppData() {
 
 function saveAppData() {
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ envelopes, transactions, monthlyIncome }));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ envelopes, transactions, monthlyIncome, budgetStartDate, budgetEndDate, budgetCycleMode }));
     } catch (error) {
         console.error("Unable to save MonetaTribe data locally:", error);
     }
     if (activeUser) {
         clearTimeout(cloudSaveTimer);
-        cloudSaveTimer = setTimeout(() => saveCloudData().catch(error => {
+        cloudSaveTimer = setTimeout(() => {
+            cloudSaveTimer = null;
+            saveCloudData().catch(error => {
             console.error("Supabase save failed:", error);
-            alert("Cloud save failed. Please check your connection and Supabase table policies before continuing.");
-        }), 700);
+            alert(`Cloud save failed: ${error.message || "Unknown Supabase error"}. Check the Supabase table policies and try again.`);
+            });
+        }, 700);
     }
 }
 
 async function loadCloudData() {
     if (!activeUser) return;
-    const period = currentPeriod();
-    const { data: budget, error: budgetError } = await supabaseClient
-        .from("monthly_budgets").select("*").eq("user_id", activeUser.id).eq("start_date", period.startDate).maybeSingle();
+    loadBudgetCycleMode();
+    const savedMode = localStorage.getItem(`monetaTribeBudgetProfile_${activeUser.id}`);
+    budgetProfileMode = savedMode === "family" ? "family" : "personal";
+    const { data: memberships, error: membershipError } = await supabaseClient.from("family_members")
+        .select("family_id,families(id,name,invite_code)").eq("user_id", activeUser.id).limit(1);
+    familySchemaAvailable = !membershipError;
+    if (membershipError && !isFamilySchemaMissingError(membershipError)) throw membershipError;
+    if (!familySchemaAvailable) {
+        activeFamily = null;
+        budgetProfileMode = "personal";
+    } else {
+        const familyRelation = memberships?.[0]?.families;
+        activeFamily = Array.isArray(familyRelation) ? (familyRelation[0] || null) : (familyRelation || null);
+    }
+    if (!activeFamily) budgetProfileMode = "personal";
+    let budgetQuery = supabaseClient.from("monthly_budgets").select("*");
+    budgetQuery = budgetProfileMode === "family" && activeFamily
+        ? budgetQuery.eq("family_id", activeFamily.id)
+        : familySchemaAvailable
+            ? budgetQuery.eq("user_id", activeUser.id).is("family_id", null)
+            : budgetQuery.eq("user_id", activeUser.id);
+    const { data: budget, error: budgetError } = await budgetQuery
+        .order("start_date", { ascending: false }).limit(1).maybeSingle();
     if (budgetError) throw budgetError;
     cloudBudgetId = budget?.id || null;
     if (!budget) {
+        initializeBudgetDates();
+        previousEnvelopeBudgets = {};
         const demoKey = `monetaTribeDemoShown_${activeUser.id}`;
         const demoAlreadyShown = localStorage.getItem(demoKey) === "yes";
         if (!demoAlreadyShown) {
@@ -96,10 +211,13 @@ async function loadCloudData() {
             envelopes = []; transactions = []; monthlyIncome = 0; isDemoBudget = false;
             refreshAll();
         }
+        scheduleBudgetRollover();
         return;
     }
     isDemoBudget = false;
     monthlyIncome = Number(budget.monthly_income) || 0;
+    budgetStartDate = budget.start_date;
+    budgetEndDate = budget.end_date;
     const { data: dbEnvelopes, error: envError } = await supabaseClient.from("envelopes").select("*").eq("budget_id", budget.id).order("created_at");
     if (envError) throw envError;
     const { data: dbTransactions, error: txError } = await supabaseClient.from("transactions").select("*").eq("budget_id", budget.id).order("transaction_date", { ascending: false });
@@ -112,31 +230,87 @@ async function loadCloudData() {
     }));
     envelopes = (dbEnvelopes || []).map(e => ({ name: e.name, budget: Number(e.allocated_budget) || 0, spent: 0 }));
     transactions.filter(t => t.type === "expense").forEach(t => { const e = envelopes.find(item => item.name === t.envelope); if (e) e.spent += t.amount; });
+    let previousQuery = supabaseClient.from("monthly_budgets").select("id")
+        .neq("id", cloudBudgetId).lt("end_date", localDateISO());
+    previousQuery = budgetProfileMode === "family" && activeFamily
+        ? previousQuery.eq("family_id", activeFamily.id)
+        : familySchemaAvailable
+            ? previousQuery.eq("user_id", activeUser.id).is("family_id", null)
+            : previousQuery.eq("user_id", activeUser.id);
+    const { data: previousBudget, error: previousBudgetError } = await previousQuery
+        .order("end_date", { ascending: false }).limit(1).maybeSingle();
+    if (previousBudgetError) throw previousBudgetError;
+    previousEnvelopeBudgets = {};
+    if (previousBudget) {
+        const { data: previousEnvelopes, error: previousEnvelopeError } = await supabaseClient.from("envelopes")
+            .select("name,allocated_budget").eq("budget_id", previousBudget.id);
+        if (previousEnvelopeError) throw previousEnvelopeError;
+        previousEnvelopeBudgets = Object.fromEntries((previousEnvelopes || []).map(e => [e.name, Number(e.allocated_budget) || 0]));
+    }
+    await rollOverBudget();
     refreshAll();
+    scheduleBudgetRollover();
 }
 
-async function saveCloudData() {
+function saveCloudData() {
+    const pendingSave = cloudSaveInFlight.catch(() => {}).then(() => persistCloudDataSnapshot());
+    cloudSaveInFlight = pendingSave;
+    return pendingSave;
+}
+
+async function flushPendingCloudSave() {
+    const hasScheduledSave = cloudSaveTimer !== null;
+    clearTimeout(cloudSaveTimer);
+    cloudSaveTimer = null;
+    await cloudSaveInFlight;
+    if (hasScheduledSave) await saveCloudData();
+}
+
+async function persistCloudDataSnapshot() {
     if (!activeUser) return;
-    const period = currentPeriod();
-    const budgetPayload = { user_id: activeUser.id, monthly_income: monthlyIncome, start_date: period.startDate, end_date: period.endDate };
-    const { data: budget, error: budgetError } = await supabaseClient.from("monthly_budgets")
-        .upsert(budgetPayload, { onConflict: "user_id,start_date" }).select("id").single();
+    const saveUserId = activeUser.id;
+    const saveProfileMode = budgetProfileMode;
+    const saveFamilyId = activeFamily?.id || null;
+    const saveBudgetId = cloudBudgetId;
+    const saveFamilySchemaAvailable = familySchemaAvailable;
+    const saveIncome = monthlyIncome;
+    const saveStartDate = budgetStartDate;
+    const saveEndDate = budgetEndDate;
+    const saveEnvelopes = envelopes.map(envelope => ({ ...envelope }));
+    const saveTransactions = transactions.map(transaction => ({ ...transaction }));
+    if (saveBudgetId && !saveEnvelopes.length) return;
+    let budget;
+    let budgetError;
+    if (saveBudgetId) {
+        const result = await supabaseClient.from("monthly_budgets")
+            .update({ monthly_income: saveIncome, start_date: saveStartDate, end_date: saveEndDate }).eq("id", saveBudgetId).select("id").single();
+        budget = result.data;
+        budgetError = result.error;
+    } else {
+        if (!saveStartDate || !saveEndDate) initializeBudgetDates();
+        const result = await supabaseClient.from("monthly_budgets")
+            .insert({ user_id: saveUserId, ...(saveFamilySchemaAvailable ? { family_id: saveProfileMode === "family" ? saveFamilyId : null } : {}), monthly_income: saveIncome, start_date: budgetStartDate, end_date: budgetEndDate })
+            .select("id").single();
+        budget = result.data;
+        budgetError = result.error;
+    }
     if (budgetError) throw budgetError;
     cloudBudgetId = budget.id;
-    // Replace this month's rows as one logical snapshot, preserving the current app's simple data model.
+    // Empty local state can occur during profile loading; never let it erase a saved budget.
+    if (!saveEnvelopes.length) return;
+    // Replace the saved rows as one logical snapshot under this account's persistent budget.
     const { error: deleteTxError } = await supabaseClient.from("transactions").delete().eq("budget_id", cloudBudgetId);
     if (deleteTxError) throw deleteTxError;
     const { error: deleteEnvError } = await supabaseClient.from("envelopes").delete().eq("budget_id", cloudBudgetId);
     if (deleteEnvError) throw deleteEnvError;
-    if (!envelopes.length) return;
-    const rows = envelopes.map(e => ({ user_id: activeUser.id, budget_id: cloudBudgetId, name: e.name, allocated_budget: e.budget }));
+    const rows = saveEnvelopes.map(e => ({ user_id: saveUserId, budget_id: budget.id, name: e.name, allocated_budget: e.budget }));
     const { data: savedEnvelopes, error: insertEnvError } = await supabaseClient.from("envelopes").insert(rows).select("id,name");
     if (insertEnvError) throw insertEnvError;
     const ids = new Map(savedEnvelopes.map(e => [e.name, e.id]));
-    const txRows = transactions.map(t => {
+    const txRows = saveTransactions.map(t => {
         const transfer = t.type === "transfer";
         const sourceName = transfer ? t.source : t.envelope;
-        return { user_id: activeUser.id, budget_id: cloudBudgetId, envelope_id: ids.get(sourceName),
+        return { user_id: saveUserId, budget_id: budget.id, envelope_id: ids.get(sourceName),
             transfer_to_envelope_id: transfer ? ids.get(t.destination) : null, transaction_type: transfer ? "transfer" : "expense",
             transaction_date: t.date, description: t.description || "", amount: t.amount };
     }).filter(t => t.envelope_id);
@@ -191,9 +365,32 @@ function makeEnvelopeActions(envelopeName) {
 function renderDashboard() {
     const demoNotice = $("demoBudgetNotice");
     if (demoNotice) demoNotice.hidden = !isDemoBudget;
+    const lastName = getProfileLastName();
+    setText("dashboardUserLastName", lastName);
+    const avatarButton = $("viewProfileButton");
+    const avatarImage = $("dashboardUserAvatar");
+    const avatar = getUserAvatar();
+    if (avatarImage) {
+        avatarImage.src = avatar.path;
+        avatarImage.alt = avatar.label;
+    }
+    if (avatarButton) {
+        avatarButton.setAttribute("aria-label", `Open ${lastName === "User" ? "user" : lastName + "'s"} profile`);
+        avatarButton.title = `Open ${lastName === "User" ? "user" : lastName + "'s"} profile`;
+    }
+    const profileToggle = $("budgetProfileToggle");
+    if (profileToggle) profileToggle.hidden = !activeFamily;
+    const personalButton = $("personalBudgetButton");
+    const familyButton = $("familyBudgetButton");
+    if (personalButton) personalButton.setAttribute("aria-pressed", String(budgetProfileMode !== "family"));
+    if (familyButton) {
+        familyButton.setAttribute("aria-pressed", String(budgetProfileMode === "family"));
+        familyButton.textContent = activeFamily ? activeFamily.name : "Family";
+        familyButton.title = activeFamily?.name || "Family budget";
+    }
     setText("totalSpent", money(totalSpent()));
     setText("actualBalance", money(actualBalance()));
-    setText("envelopeCount", `${envelopes.length} ${envelopes.length === 1 ? "envelope" : "envelopes"}`);
+    setText("envelopeCount", `${envelopes.length} ${envelopes.length === 1 ? "pocket" : "pockets"}`);
     const days = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate() - new Date().getDate();
     setText("daysLeft", String(days));
     const list = $("envelopeList");
@@ -202,26 +399,30 @@ function renderDashboard() {
     list.className = "envelope-list";
     if (!envelopes.length) {
         const empty = document.createElement("p");
-        empty.textContent = "No envelopes yet. Open Budget Setup to add one.";
+        empty.textContent = "No pockets yet. Open Budget Setup to add one.";
         list.appendChild(empty);
         return;
     }
     envelopes.forEach(envelope => {
+        const overspent = envelope.spent > envelope.budget;
         const card = document.createElement("article");
-        card.className = "envelope-card";
+        card.className = overspent ? "envelope-card envelope-over-budget" : "envelope-card";
         const top = document.createElement("div");
         top.className = "envelope-top";
         const title = document.createElement("h3");
         title.textContent = envelope.name;
         const balance = document.createElement("p");
-        balance.className = "envelope-balance";
+        balance.className = overspent ? "envelope-balance envelope-negative-balance" : "envelope-balance";
         balance.textContent = money(envelope.budget - envelope.spent);
         top.append(title, balance);
         const progress = document.createElement("div");
-        progress.className = "progress-track";
+        progress.className = overspent ? "progress-track progress-over-budget" : "progress-track";
         const fill = document.createElement("div");
-        fill.className = "progress-fill";
-        fill.style.width = `${envelope.budget > 0 ? Math.max(0, Math.min(100, (envelope.budget - envelope.spent) / envelope.budget * 100)) : 0}%`;
+        fill.className = overspent ? "progress-fill progress-over-budget-fill" : "progress-fill";
+        const progressPercent = overspent
+            ? (envelope.budget > 0 ? ((envelope.spent - envelope.budget) / envelope.budget) * 100 : 100)
+            : (envelope.budget > 0 ? ((envelope.budget - envelope.spent) / envelope.budget) * 100 : 0);
+        fill.style.width = `${Math.max(0, Math.min(100, progressPercent))}%`;
         progress.appendChild(fill);
         const amounts = document.createElement("div");
         amounts.className = "envelope-amounts";
@@ -235,13 +436,72 @@ function renderDashboard() {
     });
 }
 
+function getProfileFullName() {
+    const metadata = activeUser?.user_metadata || {};
+    const namedValue = [metadata.full_name, metadata.name].find(value => typeof value === "string" && value.trim());
+    if (namedValue) return namedValue.trim();
+    return [metadata.first_name, metadata.last_name].filter(value => typeof value === "string" && value.trim()).join(" ");
+}
+
+function getProfileLastName() {
+    const metadata = activeUser?.user_metadata || {};
+    const explicitLastName = [metadata.last_name, metadata.family_name].find(value => typeof value === "string" && value.trim());
+    if (explicitLastName) return explicitLastName.trim();
+    const fullName = getProfileFullName();
+    if (fullName) return fullName.split(/\s+/).pop();
+    return activeUser?.email?.split("@")[0] || "User";
+}
+
+function getUserAvatar() {
+    const metadata = activeUser?.user_metadata || {};
+    const age = Number(metadata.age);
+    const gender = String(metadata.gender || "male").toLowerCase();
+    const female = gender === "female";
+    if (Number.isFinite(age) && age < 20) return { path: `avatars/teen-${female ? "girl" : "boy"}.svg`, label: female ? "Teen girl avatar" : "Teen boy avatar" };
+    if (Number.isFinite(age) && age >= 60) return { path: `avatars/${female ? "grandma" : "grandpa"}.svg`, label: female ? "Grandma avatar" : "Grandpa avatar" };
+    return { path: `avatars/adult-${female ? "woman" : "man"}.svg`, label: female ? "Adult woman avatar" : "Adult man avatar" };
+}
+
+function renderProfile() {
+    const metadata = activeUser?.user_metadata || {};
+    const fullName = getProfileFullName();
+    setText("profileName", fullName || "Not provided");
+    setText("profileEmail", activeUser?.email || "Not available");
+    setText("profilePhone", activeUser?.phone || metadata.phone || metadata.phone_number || "Not provided");
+    setText("profileAge", metadata.age ? `${metadata.age} years` : "Not provided");
+    setText("profileGender", metadata.gender ? (String(metadata.gender).charAt(0).toUpperCase() + String(metadata.gender).slice(1)) : "Not provided");
+    const createdAt = activeUser?.created_at ? new Date(activeUser.created_at) : null;
+    const createdAtText = createdAt && !Number.isNaN(createdAt.getTime())
+        ? new Intl.DateTimeFormat("en-IN", { dateStyle: "long" }).format(createdAt)
+        : "Not available";
+    setText("profileCreatedAt", createdAtText);
+    const hasFamily = Boolean(activeFamily);
+    $("familyForms").hidden = hasFamily || !familySchemaAvailable;
+    $("familyDetails").hidden = !hasFamily;
+    setText("familyProfileStatus", !familySchemaAvailable
+        ? familySetupRequiredMessage()
+        : hasFamily
+            ? "Your family shares a separate budget profile. Switch profiles from the dashboard header."
+            : "Create a family budget or join one with a member’s six digit code.");
+    if (hasFamily) {
+        setText("familyNameDisplay", activeFamily.name);
+        setText("familyCodeDisplay", activeFamily.invite_code);
+    }
+}
+
 function renderSetup() {
     setText("setupIncome", money(monthlyIncome));
     setText("setupBudgeted", money(totalBudget()));
     setText("setupUnallocated", money(availableIncome()));
-    setText("setupEnvelopeCount", `${envelopes.length} ${envelopes.length === 1 ? "envelope" : "envelopes"}`);
+    setText("setupEnvelopeCount", `${envelopes.length} ${envelopes.length === 1 ? "pocket" : "pockets"}`);
     const incomeInput = $("monthlyIncomeInput");
     if (incomeInput && document.activeElement !== incomeInput) incomeInput.value = monthlyIncome;
+    const startInput = $("budgetStartDateInput");
+    const endInput = $("budgetEndDateInput");
+    if (startInput) startInput.value = budgetStartDate;
+    if (endInput) endInput.value = budgetEndDate;
+    const cycleModeInput = $("budgetCycleMode");
+    if (cycleModeInput) cycleModeInput.value = budgetCycleMode;
     const list = $("setupEnvelopeList");
     if (!list) return;
     list.replaceChildren();
@@ -272,7 +532,10 @@ function openEditEnvelope(name) {
     if (!envelope) return;
     editingEnvelopeName = envelope.name;
     $("editEnvelopeName").value = envelope.name;
-    $("editEnvelopeBudget").value = envelope.budget;
+    const hasPreviousBudget = Object.prototype.hasOwnProperty.call(previousEnvelopeBudgets, envelope.name);
+    const suggestedBudget = Number(previousEnvelopeBudgets[envelope.name]);
+    $("editEnvelopeBudget").value = envelope.budget > 0 ? envelope.budget : (hasPreviousBudget ? suggestedBudget : envelope.budget);
+    setText("editEnvelopePreviousBudgetNote", hasPreviousBudget ? `Previous budget: ${money(suggestedBudget)}. This amount was filled in for you.` : "");
     setText("editEnvelopeSpentNote", `Already spent: ${money(envelope.spent)}`);
     setText("editEnvelopeUnallocated", `Unallocated amount: ${money(availableIncome())}`);
     clearMessage("editEnvelopeMessage");
@@ -281,16 +544,20 @@ function openEditEnvelope(name) {
 
 function saveEnvelopeEdits() {
     const envelope = findEnvelope(editingEnvelopeName);
-    if (!envelope) return setMessage("editEnvelopeMessage", "Envelope not found.");
+    if (!envelope) return setMessage("editEnvelopeMessage", "Pocket not found.");
     const newName = $("editEnvelopeName").value.trim();
     const newBudget = Number($("editEnvelopeBudget").value);
-    if (!newName) return setMessage("editEnvelopeMessage", "Enter an envelope name.");
-    if (envelopes.some(e => e !== envelope && e.name.toLowerCase() === newName.toLowerCase())) return setMessage("editEnvelopeMessage", "An envelope with this name already exists.");
-    if (!Number.isFinite(newBudget) || newBudget < envelope.spent) return setMessage("editEnvelopeMessage", `Budget must be at least ${money(envelope.spent)}.`);
+    if (!newName) return setMessage("editEnvelopeMessage", "Enter a pocket name.");
+    if (envelopes.some(e => e !== envelope && e.name.toLowerCase() === newName.toLowerCase())) return setMessage("editEnvelopeMessage", "A pocket with this name already exists.");
+    if (!Number.isFinite(newBudget) || newBudget < 0) return setMessage("editEnvelopeMessage", "Budget must be zero or greater.");
     if (totalBudget() - envelope.budget + newBudget > monthlyIncome) return setMessage("editEnvelopeMessage", "Total budgets cannot exceed monthly income.");
     const oldName = envelope.name;
     envelope.name = newName;
     envelope.budget = newBudget;
+    if (Object.prototype.hasOwnProperty.call(previousEnvelopeBudgets, oldName)) {
+        previousEnvelopeBudgets[newName] = previousEnvelopeBudgets[oldName];
+        if (newName !== oldName) delete previousEnvelopeBudgets[oldName];
+    }
     transactions.forEach(t => {
         if (t.envelope === oldName) t.envelope = newName;
         if (t.source === oldName) t.source = newName;
@@ -305,8 +572,8 @@ function deleteEnvelope(name) {
     const envelope = findEnvelope(name);
     if (!envelope) return;
     const hasHistory = transactions.some(t => t.envelope === name || t.source === name || t.destination === name);
-    if (hasHistory || envelope.spent > 0) return setMessage("editEnvelopeMessage", "This envelope has spending or transfer history and cannot be deleted.");
-    if (!confirm(`Delete the envelope “${name}”?`)) return;
+    if (hasHistory || envelope.spent > 0) return setMessage("editEnvelopeMessage", "This pocket has spending or transfer history and cannot be deleted.");
+    if (!confirm(`Delete the pocket “${name}”?`)) return;
     envelopes = envelopes.filter(e => e !== envelope);
     editingEnvelopeName = null;
     refreshAll();
@@ -320,7 +587,7 @@ function renderTransactionForm() {
     select.replaceChildren();
     const placeholder = document.createElement("option");
     placeholder.value = "";
-    placeholder.textContent = "Select an envelope";
+    placeholder.textContent = "Select a pocket";
     select.appendChild(placeholder);
     envelopes.forEach(e => {
         const option = document.createElement("option");
@@ -337,13 +604,31 @@ function renderHistory() {
     const list = $("transactionHistoryList");
     if (!list) return;
     list.replaceChildren();
-    setText("historyCount", `${transactions.length} ${transactions.length === 1 ? "transaction" : "transactions"}`);
-    setText("historyEmptyMessage", transactions.length ? "" : "No transactions recorded yet.");
+    const archiveFrom = $("previousTransactionsFrom")?.value || "";
+    const archiveTo = $("previousTransactionsTo")?.value || "";
+    const invalidArchiveRange = historyViewingArchive && archiveFrom && archiveTo && archiveFrom > archiveTo;
+    const archivedMatches = archivedTransactions.filter(t => (!archiveFrom || String(t.date || "") >= archiveFrom) && (!archiveTo || String(t.date || "") <= archiveTo));
+    const shownTransactions = historyViewingArchive ? archivedMatches : transactions;
+    setText("historyCount", `${shownTransactions.length} ${shownTransactions.length === 1 ? "transaction" : "transactions"}${historyViewingArchive ? " in previous budgets" : ""}`);
+    setText("historyEmptyMessage", invalidArchiveRange ? "From date must be on or before To date." : shownTransactions.length ? "" : (historyViewingArchive ? (archivedTransactions.length ? "No previous transactions match these dates." : "No previous transactions have been recorded.") : "No transactions recorded yet."));
     const toggle = $("toggleHistoryManagement");
     if (toggle) toggle.textContent = historyManageMode ? "Done" : "Edit Transactions";
+    if (toggle) toggle.hidden = historyViewingArchive;
+    const previousToggle = $("togglePreviousTransactions");
+    if (previousToggle) previousToggle.textContent = historyViewingArchive ? "View Current Transactions" : "Previous Transactions";
+    const archiveFilters = $("previousTransactionsFilters");
+    if (archiveFilters) archiveFilters.hidden = !historyViewingArchive;
+    const archiveActions = $("previousTransactionsActions");
+    if (archiveActions) archiveActions.hidden = !historyViewingArchive;
+    const archiveManageToggle = $("togglePreviousTransactionsManagement");
+    if (archiveManageToggle) archiveManageToggle.textContent = archiveManageMode ? "Done Editing Previous Transactions" : "Edit Previous Transactions";
+    const deleteAllArchiveButton = $("deleteAllPreviousTransactions");
+    if (deleteAllArchiveButton) deleteAllArchiveButton.hidden = !archiveManageMode || archivedTransactions.length === 0;
     const panel = $("historyManagementPanel");
-    if (panel) panel.hidden = !historyManageMode;
-    [...transactions].sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))).forEach(t => {
+    if (panel) panel.hidden = !historyManageMode || historyViewingArchive;
+    const editForm = $("editTransactionForm");
+    if (historyViewingArchive && editForm) editForm.hidden = true;
+    [...shownTransactions].sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))).forEach(t => {
         const row = document.createElement("div");
         row.className = "transaction-item";
         const details = document.createElement("div"); details.className = "transaction-main-details";
@@ -353,7 +638,7 @@ function renderHistory() {
         details.append(desc, category, date);
         const amount = document.createElement("strong"); amount.className = "transaction-amount"; amount.textContent = money(t.amount);
         row.append(details, amount);
-        if (historyManageMode) {
+        if (historyManageMode && !historyViewingArchive) {
             const actions = document.createElement("div"); actions.className = "transaction-actions";
             if (t.type !== "transfer") {
                 const edit = document.createElement("button"); edit.type = "button"; edit.className = "secondary-button"; edit.textContent = "Modify";
@@ -363,8 +648,121 @@ function renderHistory() {
             remove.addEventListener("click", () => deleteSingleTransaction(t.id)); actions.appendChild(remove);
             row.appendChild(actions);
         }
+        if (archiveManageMode && historyViewingArchive) {
+            const actions = document.createElement("div"); actions.className = "transaction-actions";
+            const remove = document.createElement("button"); remove.type = "button"; remove.className = "danger-button"; remove.textContent = "Delete";
+            remove.addEventListener("click", () => deletePreviousTransaction(t.id, t.budgetId));
+            actions.appendChild(remove);
+            row.appendChild(actions);
+        }
         list.appendChild(row);
     });
+}
+
+async function togglePreviousBudgetTransactions() {
+    if (historyViewingArchive) {
+        historyViewingArchive = false;
+        archivedTransactions = [];
+        archivedBudgetIds = [];
+        archiveManageMode = false;
+        historyManageMode = false;
+        clearMessage("historyArchiveMessage");
+        renderHistory();
+        return;
+    }
+    if (!activeUser || !budgetStartDate) {
+        setText("historyArchiveMessage", "Previous budget history is available after a budget has been saved.");
+        return;
+    }
+    const previousBudgets = await fetchAllSupabaseRows(() => {
+        let query = supabaseClient.from("monthly_budgets").select("id,start_date,end_date")
+            .lt("end_date", localDateISO()).order("start_date", { ascending: false });
+        query = budgetProfileMode === "family" && activeFamily
+            ? query.eq("family_id", activeFamily.id)
+            : familySchemaAvailable
+                ? query.eq("user_id", activeUser.id).is("family_id", null)
+                : query.eq("user_id", activeUser.id);
+        if (cloudBudgetId) query = query.neq("id", cloudBudgetId);
+        return query;
+    });
+    if (!previousBudgets?.length) {
+        archivedBudgetIds = [];
+        setText("historyArchiveMessage", "There are no previous budget periods yet.");
+        return;
+    }
+    const previousBudgetIds = previousBudgets.map(b => b.id);
+    archivedBudgetIds = previousBudgetIds;
+    const idChunks = [];
+    for (let i = 0; i < previousBudgetIds.length; i += 100) idChunks.push(previousBudgetIds.slice(i, i + 100));
+    const [envelopePages, transactionPages] = await Promise.all([
+        Promise.all(idChunks.map(ids => fetchAllSupabaseRows(() => supabaseClient.from("envelopes").select("id,name").in("budget_id", ids)))),
+        Promise.all(idChunks.map(ids => fetchAllSupabaseRows(() => supabaseClient.from("transactions").select("*").in("budget_id", ids).order("transaction_date", { ascending: false }))))
+    ]);
+    const dbEnvelopes = envelopePages.flat();
+    const dbTransactions = transactionPages.flat();
+    const envelopeNames = new Map((dbEnvelopes || []).map(e => [e.id, e.name]));
+    archivedTransactions = (dbTransactions || []).map(t => ({
+        id: t.id, budgetId: t.budget_id, type: t.transaction_type, date: t.transaction_date, amount: Number(t.amount), description: t.description || "",
+        envelope: envelopeNames.get(t.envelope_id) || "",
+        source: t.transaction_type === "transfer" ? envelopeNames.get(t.envelope_id) : undefined,
+        destination: t.transfer_to_envelope_id ? envelopeNames.get(t.transfer_to_envelope_id) : undefined
+    }));
+    clearMessage("historyArchiveMessage");
+    historyViewingArchive = true;
+    historyManageMode = false;
+    archiveManageMode = false;
+    renderHistory();
+}
+
+async function deletePreviousTransaction(id, budgetId) {
+    const transaction = archivedTransactions.find(item => item.id === id && item.budgetId === budgetId);
+    if (!transaction || !activeUser) return;
+    if (!confirm("Delete this previous transaction? This cannot be undone.")) return;
+    const { error } = await supabaseClient.from("transactions").delete()
+        .eq("budget_id", budgetId).eq("id", id);
+    if (error) {
+        console.error("Could not delete previous transaction:", error);
+        setText("historyArchiveMessage", "This previous transaction could not be deleted. Please try again.");
+        return;
+    }
+    archivedTransactions = archivedTransactions.filter(item => !(item.id === id && item.budgetId === budgetId));
+    renderHistory();
+    setText("historyArchiveMessage", "Previous transaction deleted.");
+}
+
+async function deleteAllPreviousTransactions() {
+    const count = archivedTransactions.length;
+    if (!activeUser || !archivedBudgetIds.length || !count) return;
+    if (!confirm(`Delete all ${count} previous transactions from every expired budget period? This cannot be undone.`)) return;
+    const button = $("deleteAllPreviousTransactions");
+    if (button) button.disabled = true;
+    try {
+        for (let i = 0; i < archivedBudgetIds.length; i += 100) {
+            const ids = archivedBudgetIds.slice(i, i + 100);
+            const { error } = await supabaseClient.from("transactions").delete()
+                .in("budget_id", ids);
+            if (error) throw error;
+        }
+        archivedTransactions = [];
+        renderHistory();
+        setText("historyArchiveMessage", `Deleted ${count} previous transaction${count === 1 ? "" : "s"}.`);
+    } catch (error) {
+        console.error("Could not delete all previous transactions:", error);
+        setText("historyArchiveMessage", "Previous transactions could not all be deleted. Please reload the archive and try again.");
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+async function fetchAllSupabaseRows(makeQuery) {
+    const pageSize = 1000;
+    const rows = [];
+    for (let offset = 0; ; offset += pageSize) {
+        const { data, error } = await makeQuery().range(offset, offset + pageSize - 1);
+        if (error) throw error;
+        rows.push(...(data || []));
+        if (!data || data.length < pageSize) return rows;
+    }
 }
 
 function openTransactionEditor(transaction) {
@@ -396,8 +794,6 @@ function saveEditedTransaction(event) {
     const description = $("editTransactionDescription").value.trim();
     if (!nextEnvelope || !date || !description || !Number.isFinite(amount) || amount <= 0) return setMessage("editTransactionMessage", "Complete all fields with a valid amount.");
     const oldEnvelope = findEnvelope(old.envelope);
-    const availableInTarget = nextEnvelope.budget - nextEnvelope.spent + (nextEnvelope.name === old.envelope ? old.amount : 0);
-    if (amount > availableInTarget) return setMessage("editTransactionMessage", "The new amount exceeds the selected envelope's remaining budget.");
     if (oldEnvelope) oldEnvelope.spent = Math.max(0, oldEnvelope.spent - Number(old.amount));
     nextEnvelope.spent += amount;
     old.envelope = nextEnvelope.name; old.amount = amount; old.date = date; old.description = description;
@@ -428,7 +824,7 @@ function reverseTransaction(t) {
 function deleteSingleTransaction(id) {
     const transaction = transactions.find(t => t.id === id);
     if (!transaction) return;
-    if (!confirm("Delete this transaction? The envelope balance will be adjusted.")) return;
+    if (!confirm("Delete this transaction? The pocket balance will be adjusted.")) return;
     const error = reverseTransaction(transaction);
     if (error) { setMessage("historyManagementMessage", error); return; }
     transactions = transactions.filter(t => t.id !== id);
@@ -444,7 +840,7 @@ function deleteTransactionsByPeriod() {
     const selected = transactions.filter(t => String(t.date || "") >= from && String(t.date || "") <= to)
         .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
     if (!selected.length) return setMessage("historyManagementMessage", "No transactions were found in that date range.", false);
-    if (!confirm(`Delete ${selected.length} transaction(s) dated ${from} through ${to}? Envelope balances will be adjusted.`)) return;
+    if (!confirm(`Delete ${selected.length} transaction(s) dated ${from} through ${to}? Pocket balances will be adjusted.`)) return;
     for (const t of selected) {
         const error = reverseTransaction(t);
         if (error) { refreshAll(); return setMessage("historyManagementMessage", error); }
@@ -456,7 +852,7 @@ function deleteTransactionsByPeriod() {
 
 function deleteAllTransactions() {
     if (!transactions.length) return setMessage("historyManagementMessage", "There are no transactions to delete.", false);
-    if (!confirm(`Delete all ${transactions.length} transactions? Envelope balances will be adjusted.`)) return;
+    if (!confirm(`Delete all ${transactions.length} transactions? Pocket balances will be adjusted.`)) return;
     const selected = [...transactions].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
     for (const t of selected) {
         const error = reverseTransaction(t);
@@ -475,7 +871,7 @@ function renderTransferForm() {
         select.replaceChildren();
         const placeholder = document.createElement("option");
         placeholder.value = "";
-        placeholder.textContent = index === 0 ? "Select source envelope" : "Select destination envelope";
+        placeholder.textContent = index === 0 ? "Select source pocket" : "Select destination pocket";
         select.appendChild(placeholder);
         envelopes.forEach(e => {
             const option = document.createElement("option");
@@ -577,8 +973,12 @@ $("newPasswordForm")?.addEventListener("submit", async event => {
     // Password update is complete. End the recovery session and return to login.
     await supabaseClient.auth.signOut();
     activeUser = null;
+    activeFamily = null;
+    budgetProfileMode = "personal";
     cloudBudgetId = null;
     passwordRecoveryActive = false;
+    localStorage.removeItem(KEEP_LOGGED_IN_KEY);
+    $("keepLoggedIn").checked = false;
     $("newPasswordForm").reset();
     $("forgotPasswordForm").hidden = false;
     $("newPasswordForm").hidden = true;
@@ -590,6 +990,13 @@ $("newPasswordForm")?.addEventListener("submit", async event => {
 // ==================== FORM HANDLERS ====================
 
 const REMEMBER_EMAIL_KEY = "monetaTribeRememberedEmail";
+const KEEP_LOGGED_IN_KEY = "monetaTribeKeepLoggedIn";
+$("keepLoggedIn").checked = localStorage.getItem(KEEP_LOGGED_IN_KEY) === "yes";
+const rememberedEmail = localStorage.getItem(REMEMBER_EMAIL_KEY);
+if (rememberedEmail) {
+    $("loginEmail").value = rememberedEmail;
+    $("rememberMe").checked = true;
+}
 
 $("loginForm")?.addEventListener("submit", async event => {
     event.preventDefault();
@@ -602,8 +1009,9 @@ $("loginForm")?.addEventListener("submit", async event => {
     if (button) button.disabled = false;
     if (error) { setMessage("message", error.message); return; }
     activeUser = data.user;
-    if ($("rememberMe")?.checked) localStorage.setItem(REMEMBER_EMAIL_KEY, email);
+    if ($("rememberMe").checked) localStorage.setItem(REMEMBER_EMAIL_KEY, email);
     else localStorage.removeItem(REMEMBER_EMAIL_KEY);
+    localStorage.setItem(KEEP_LOGGED_IN_KEY, $("keepLoggedIn").checked ? "yes" : "no");
     try { await loadCloudData(); clearMessage("message"); showPage("homePage"); }
     catch (err) { setMessage("message", "Signed in, but cloud data could not load: " + err.message); }
 });
@@ -613,15 +1021,19 @@ $("backToLogin")?.addEventListener("click", () => showPage("loginPage"));
 $("registerForm")?.addEventListener("submit", async event => {
     event.preventDefault();
     const name = $("registerName").value.trim();
+    const age = Number($("registerAge").value);
+    const gender = $("registerGender").value;
     const email = $("registerEmail").value.trim().toLowerCase();
     const password = $("registerPassword").value;
     const button = $("registerForm").querySelector('button[type="submit"]');
     if (button) button.disabled = true;
-    const { data, error } = await supabaseClient.auth.signUp({ email, password, options: { data: { full_name: name },emailRedirectTo: 'https://renjumathew7.github.io/MonetaTribe/' } });
+    const { data, error } = await supabaseClient.auth.signUp({ email, password, options: { data: { full_name: name, age, gender },emailRedirectTo: 'https://renjumathew7.github.io/MonetaTribe/' } });
     if (button) button.disabled = false;
     if (error) { alert(error.message); return; }
     if (data.session && data.user) {
         activeUser = data.user;
+        localStorage.setItem(KEEP_LOGGED_IN_KEY, "no");
+        $("keepLoggedIn").checked = false;
         try { await loadCloudData(); showPage("homePage"); }
         catch (err) { alert("Account created, but data setup failed: " + err.message); }
     } else {
@@ -630,17 +1042,129 @@ $("registerForm")?.addEventListener("submit", async event => {
     }
 });
 
-const rememberedEmail = localStorage.getItem(REMEMBER_EMAIL_KEY);
-if (rememberedEmail) {
-    $("loginEmail").value = rememberedEmail;
-    $("rememberMe").checked = true;
-}
-
 $("logoutButton")?.addEventListener("click", async () => {
+    clearTimeout(budgetRolloverTimer);
+    try { await flushPendingCloudSave(); }
+    catch (error) { console.error("Could not finish saving before logout:", error); }
     await supabaseClient.auth.signOut();
-    activeUser = null; cloudBudgetId = null; showPage("loginPage");
+    localStorage.removeItem(KEEP_LOGGED_IN_KEY);
+    $("keepLoggedIn").checked = false;
+    activeUser = null; activeFamily = null; budgetProfileMode = "personal"; cloudBudgetId = null; historyViewingArchive = false; archivedTransactions = []; archivedBudgetIds = []; archiveManageMode = false; showPage("loginPage");
 });
 $("backToHome")?.addEventListener("click", () => { renderDashboard(); showPage("homePage"); });
+$("viewProfileButton")?.addEventListener("click", () => { renderProfile(); showPage("profilePage"); });
+$("profileBackToHome")?.addEventListener("click", () => showPage("homePage"));
+async function switchBudgetProfile(mode) {
+    if (mode === "family" && !activeFamily) return;
+    if (budgetProfileMode === mode) return;
+    try { await flushPendingCloudSave(); }
+    catch (error) {
+        alert("The current budget could not be saved, so the profile was not switched: " + error.message);
+        return;
+    }
+    budgetProfileMode = mode;
+    historyViewingArchive = false;
+    archivedTransactions = [];
+    archivedBudgetIds = [];
+    archiveManageMode = false;
+    if (activeUser) localStorage.setItem(`monetaTribeBudgetProfile_${activeUser.id}`, mode);
+    try {
+        await loadCloudData();
+        await flushPendingCloudSave();
+        showPage("homePage");
+    } catch (error) {
+        console.error("Could not switch budget profile:", error);
+        alert("The selected budget profile could not be loaded: " + error.message);
+    }
+}
+$("personalBudgetButton")?.addEventListener("click", () => switchBudgetProfile("personal"));
+$("familyBudgetButton")?.addEventListener("click", () => switchBudgetProfile("family"));
+$("createFamilyForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const name = $("newFamilyName").value.trim();
+    if (!name) return setMessage("createFamilyMessage", "Enter a family name.");
+    const button = $("createFamilyForm").querySelector('button[type="submit"]');
+    button.disabled = true;
+    try { await flushPendingCloudSave(); }
+    catch (err) {
+        button.disabled = false;
+        return setMessage("createFamilyMessage", "Your personal budget could not be saved, so the family was not created: " + err.message);
+    }
+    setMessage("createFamilyMessage", "Creating your family…", false);
+    const { data, error } = await supabaseClient.rpc("create_family", { family_name_input: name });
+    button.disabled = false;
+    if (error) return setMessage("createFamilyMessage", error.code === "PGRST202" ? familySetupRequiredMessage() : error.message);
+    const created = Array.isArray(data) ? data[0] : data;
+    if (!created?.family_id) return setMessage("createFamilyMessage", "The family was created, but its details could not be loaded. Please reopen your profile.");
+    activeFamily = { id: created.family_id, name: created.family_name, invite_code: created.invite_code };
+    budgetProfileMode = "family";
+    localStorage.setItem(`monetaTribeBudgetProfile_${activeUser.id}`, "family");
+    try { await loadCloudData(); await flushPendingCloudSave(); }
+    catch (err) { setMessage("createFamilyMessage", "Family created, but the shared budget could not load: " + err.message); }
+    renderProfile();
+    showPage("profilePage");
+});
+$("joinFamilyForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const code = $("familyInviteCode").value.trim();
+    if (!/^\d{6}$/.test(code)) return setMessage("joinFamilyMessage", "Enter the six digit family code.");
+    const button = $("joinFamilyForm").querySelector('button[type="submit"]');
+    button.disabled = true;
+    try { await flushPendingCloudSave(); }
+    catch (err) {
+        button.disabled = false;
+        return setMessage("joinFamilyMessage", "Your current budget could not be saved, so you were not added to the family: " + err.message);
+    }
+    setMessage("joinFamilyMessage", "Joining family…", false);
+    const { data, error } = await supabaseClient.rpc("join_family", { invite_code_input: code });
+    button.disabled = false;
+    if (error) return setMessage("joinFamilyMessage", error.code === "PGRST202" ? familySetupRequiredMessage() : error.message);
+    const joined = Array.isArray(data) ? data[0] : data;
+    if (!joined?.family_id) return setMessage("joinFamilyMessage", "The family could not be found. Check the code and try again.");
+    activeFamily = { id: joined.family_id, name: joined.family_name, invite_code: joined.invite_code };
+    budgetProfileMode = "family";
+    localStorage.setItem(`monetaTribeBudgetProfile_${activeUser.id}`, "family");
+    try { await loadCloudData(); await flushPendingCloudSave(); showPage("homePage"); }
+    catch (err) { setMessage("joinFamilyMessage", "You joined the family, but its shared budget could not load: " + err.message); }
+});
+$("editProfileButton")?.addEventListener("click", () => {
+    const metadata = activeUser?.user_metadata || {};
+    $("editProfileName").value = getProfileFullName();
+    $("editProfileAge").value = metadata.age || "";
+    $("editProfileGender").value = metadata.gender || "";
+    $("editProfileForm").hidden = false;
+    $("editProfileButton").hidden = true;
+    clearMessage("editProfileMessage");
+});
+$("cancelEditProfile")?.addEventListener("click", () => {
+    $("editProfileForm").hidden = true;
+    $("editProfileButton").hidden = false;
+    clearMessage("editProfileMessage");
+});
+$("editProfileForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const fullName = $("editProfileName").value.trim();
+    const age = Number($("editProfileAge").value);
+    const gender = $("editProfileGender").value;
+    if (!fullName) return setMessage("editProfileMessage", "Enter your full name.");
+    if (!Number.isInteger(age) || age < 13 || age > 120) return setMessage("editProfileMessage", "Enter an age from 13 to 120.");
+    if (gender !== "male" && gender !== "female") return setMessage("editProfileMessage", "Select a gender.");
+    const submitButton = $("editProfileForm").querySelector('button[type="submit"]');
+    submitButton.disabled = true;
+    setMessage("editProfileMessage", "Saving profile…", false);
+    const metadata = activeUser?.user_metadata || {};
+    const { data, error } = await supabaseClient.auth.updateUser({
+        data: { ...metadata, full_name: fullName, age, gender }
+    });
+    submitButton.disabled = false;
+    if (error) return setMessage("editProfileMessage", error.message);
+    activeUser = data.user;
+    $("editProfileForm").hidden = true;
+    $("editProfileButton").hidden = false;
+    renderProfile();
+    renderDashboard();
+    clearMessage("editProfileMessage");
+});
 $("transferBackToHome")?.addEventListener("click", () => showPage("homePage"));
 $("cancelAddEnvelope")?.addEventListener("click", () => { clearMessage("addEnvelopeMessage"); showPage("setupPage"); });
 $("cancelTransaction")?.addEventListener("click", () => { clearMessage("transactionMessage"); showPage("homePage"); });
@@ -665,12 +1189,43 @@ $("monthlyIncomeInput")?.addEventListener("change", () => {
         return;
     }
     if (totalBudget() > value) {
-        alert("Monthly income cannot be less than the total envelope budgets.");
+        alert("Monthly income cannot be less than the total pocket budgets.");
         renderSetup();
         return;
     }
     monthlyIncome = value;
     refreshAll();
+});
+
+function saveBudgetPeriodDates() {
+    const start = $("budgetStartDateInput").value;
+    const end = $("budgetEndDateInput").value;
+    if (!start || !end) {
+        setMessage("budgetPeriodMessage", "Choose both the from and to dates.");
+        return;
+    }
+    if (start > end) {
+        setMessage("budgetPeriodMessage", "The from date must be on or before the to date.");
+        return;
+    }
+    budgetStartDate = start;
+    budgetEndDate = end;
+    clearMessage("budgetPeriodMessage");
+    refreshAll();
+    scheduleBudgetRollover();
+}
+$("budgetStartDateInput")?.addEventListener("change", saveBudgetPeriodDates);
+$("budgetEndDateInput")?.addEventListener("change", saveBudgetPeriodDates);
+$("budgetCycleMode")?.addEventListener("change", async () => {
+    const selectedMode = $("budgetCycleMode").value;
+    if (selectedMode !== "30days" && selectedMode !== "monthEnd") return;
+    budgetCycleMode = selectedMode;
+    if (activeUser) {
+        localStorage.setItem(`monetaTribeCycleMode_${activeUser.id}`, budgetCycleMode);
+        const { data, error } = await supabaseClient.auth.updateUser({ data: { monetatribe_budget_cycle_mode: budgetCycleMode } });
+        if (error) setMessage("budgetPeriodMessage", "The next-period preference could not be synced to your account.");
+        else activeUser = data.user;
+    }
 });
 
 $("addEnvelopeButton")?.addEventListener("click", () => {
@@ -683,8 +1238,8 @@ $("addEnvelopeButton")?.addEventListener("click", () => {
 function submitEnvelope(addAnother = false) {
     const name = $("envelopeName")?.value.trim();
     const budget = Number($("envelopeBudget")?.value);
-    if (!name) return setMessage("addEnvelopeMessage", "Enter an envelope name.");
-    if (envelopes.some(e => e.name.toLowerCase() === name.toLowerCase())) return setMessage("addEnvelopeMessage", "An envelope with this name already exists.");
+    if (!name) return setMessage("addEnvelopeMessage", "Enter a pocket name.");
+    if (envelopes.some(e => e.name.toLowerCase() === name.toLowerCase())) return setMessage("addEnvelopeMessage", "A pocket with this name already exists.");
     if (!Number.isFinite(budget) || budget <= 0) return setMessage("addEnvelopeMessage", "Enter a budget greater than zero.");
     if (totalBudget() + budget > monthlyIncome) return setMessage("addEnvelopeMessage", "This exceeds your unallocated monthly income.");
     envelopes.push({ name, budget, spent: 0 });
@@ -692,7 +1247,7 @@ function submitEnvelope(addAnother = false) {
     if (addAnother) {
         $("addEnvelopeForm")?.reset();
         renderAddEnvelopeSummary();
-        setMessage("addEnvelopeMessage", "Envelope saved. You can add another.", false);
+        setMessage("addEnvelopeMessage", "Pocket saved. You can add another.", false);
     } else {
         showPage("setupPage");
     }
@@ -705,12 +1260,10 @@ function saveTransaction(addAnother = false) {
     const amount = Number($("transactionAmount")?.value);
     const description = $("transactionDescription")?.value.trim();
     const date = $("transactionDate")?.value;
-    if (!envelope) return setMessage("transactionMessage", "Choose an envelope.");
+    if (!envelope) return setMessage("transactionMessage", "Choose a pocket.");
     if (!Number.isFinite(amount) || amount <= 0) return setMessage("transactionMessage", "Enter an amount greater than zero.");
     if (!description) return setMessage("transactionMessage", "Enter a description.");
     if (!date) return setMessage("transactionMessage", "Choose a date.");
-    if (envelope.spent + amount > envelope.budget) return setMessage("transactionMessage", "This expense exceeds the envelope's remaining budget.");
-    if (amount > actualBalance()) return setMessage("transactionMessage", "There is not enough overall balance for this expense.");
     const keepEnvelope = envelope.name;
     const keepDate = date;
     envelope.spent += amount;
@@ -751,10 +1304,10 @@ $("transferForm")?.addEventListener("submit", event => {
     const source = findEnvelope($("transferFrom")?.value);
     const destination = findEnvelope($("transferTo")?.value);
     const amount = Number($("transferAmount")?.value);
-    if (!source || !destination) return setMessage("transferMessage", "Select both envelopes.");
-    if (source === destination) return setMessage("transferMessage", "Choose two different envelopes.");
+    if (!source || !destination) return setMessage("transferMessage", "Select both pockets.");
+    if (source === destination) return setMessage("transferMessage", "Choose two different pockets.");
     if (!Number.isFinite(amount) || amount <= 0) return setMessage("transferMessage", "Enter an amount greater than zero.");
-    if (amount > source.budget - source.spent) return setMessage("transferMessage", "The source envelope does not have enough unspent budget.");
+    if (amount > source.budget - source.spent) return setMessage("transferMessage", "The source pocket does not have enough unspent budget.");
     source.budget -= amount;
     destination.budget += amount;
     transactions.push({ id: Date.now(), type: "transfer", source: source.name, destination: destination.name, amount, description: `Transfer from ${source.name} to ${destination.name}`, date: new Date().toISOString().slice(0, 10) });
@@ -767,14 +1320,41 @@ $("transferForm")?.addEventListener("submit", event => {
 
 $("historyBackToHome")?.addEventListener("click", () => {
     historyManageMode = false;
+    historyViewingArchive = false;
+    archivedTransactions = [];
+    archivedBudgetIds = [];
+    archiveManageMode = false;
+    clearMessage("historyArchiveMessage");
     if ($("editTransactionForm")) $("editTransactionForm").hidden = true;
     renderDashboard();
     showPage("homePage");
 });
 
 $("toggleHistoryManagement")?.addEventListener("click", () => {
+    if (historyViewingArchive) return;
     historyManageMode = !historyManageMode;
     if (!historyManageMode) $("editTransactionForm").hidden = true;
+    renderHistory();
+});
+$("togglePreviousTransactions")?.addEventListener("click", () => {
+    togglePreviousBudgetTransactions().catch(error => {
+        console.error("Could not load previous budget transactions:", error);
+        setText("historyArchiveMessage", "Previous budget transactions could not be loaded. Please try again.");
+    });
+});
+$("deleteAllPreviousTransactions")?.addEventListener("click", () => {
+    deleteAllPreviousTransactions();
+});
+$("togglePreviousTransactionsManagement")?.addEventListener("click", () => {
+    if (!historyViewingArchive) return;
+    archiveManageMode = !archiveManageMode;
+    renderHistory();
+});
+$("previousTransactionsFrom")?.addEventListener("change", renderHistory);
+$("previousTransactionsTo")?.addEventListener("change", renderHistory);
+$("clearPreviousTransactionDates")?.addEventListener("click", () => {
+    $("previousTransactionsFrom").value = "";
+    $("previousTransactionsTo").value = "";
     renderHistory();
 });
 $("editTransactionForm")?.addEventListener("submit", saveEditedTransaction);
@@ -785,16 +1365,30 @@ $("deleteAllTransactions")?.addEventListener("click", deleteAllTransactions);
 
 // Restore a normal session, but never route a password-recovery session to the dashboard.
 refreshAll();
-showPage("loginPage");
+showPage("sessionLoadingPage");
 supabaseClient.auth.getSession().then(async ({ data, error }) => {
     if (error || !data.session) {
         if (passwordRecoveryActive) showNewPasswordForm();
+        else {
+            if (error) setMessage("message", "Your session could not be restored. Please log in.");
+            showPage("loginPage");
+        }
         return;
     }
 
     activeUser = data.session.user;
     if (passwordRecoveryActive) {
         showNewPasswordForm();
+        return;
+    }
+
+    if (localStorage.getItem(KEEP_LOGGED_IN_KEY) !== "yes") {
+        await supabaseClient.auth.signOut();
+        activeUser = null;
+        activeFamily = null;
+        budgetProfileMode = "personal";
+        cloudBudgetId = null;
+        showPage("loginPage");
         return;
     }
 
@@ -805,4 +1399,8 @@ supabaseClient.auth.getSession().then(async ({ data, error }) => {
         console.error("Could not restore cloud data:", err);
         alert("You are signed in, but your cloud data could not be loaded: " + err.message);
     }
+}).catch(error => {
+    console.error("Could not check the saved session:", error);
+    setMessage("message", "Your session could not be checked. Please log in.");
+    showPage("loginPage");
 });
