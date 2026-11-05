@@ -510,11 +510,15 @@ function renderDashboard() {
     if (profileToggle) profileToggle.hidden = !activeFamily;
     const personalButton = $("personalBudgetButton");
     const familyButton = $("familyBudgetButton");
-    if (personalButton) personalButton.setAttribute("aria-pressed", String(budgetProfileMode !== "family"));
+    if (personalButton) {
+        personalButton.setAttribute("aria-pressed", String(budgetProfileMode !== "family"));
+        personalButton.setAttribute("aria-label", "Personal budget");
+    }
     if (familyButton) {
         familyButton.setAttribute("aria-pressed", String(budgetProfileMode === "family"));
-        familyButton.textContent = activeFamily ? activeFamily.name : "Family";
+        familyButton.textContent = activeFamily?.name || "Family";
         familyButton.title = activeFamily?.name || "Family budget";
+        familyButton.setAttribute("aria-label", activeFamily ? `Family budget: ${activeFamily.name}` : "Family budget");
     }
     const restrictedMember = isRestrictedFamilyMember();
     document.querySelectorAll("#homePage .dashboard-actions [data-page]").forEach(button => {

@@ -88,9 +88,12 @@
                     <img id="dashboardUserAvatar" src="avatars/adult-man.svg" alt="">
                 </button>
                 <span id="dashboardUserLastName" class="user-avatar-name">User</span>
-                <div id="budgetProfileToggle" class="budget-profile-toggle" hidden>
-                    <button type="button" id="personalBudgetButton" class="secondary-button" aria-pressed="true">Personal</button>
-                    <button type="button" id="familyBudgetButton" class="secondary-button" aria-pressed="false">Family</button>
+                <div id="budgetProfileToggle" class="budget-profile-switcher" hidden>
+                    <span class="budget-profile-switcher-label">Budget profile</span>
+                    <div class="budget-profile-tabs" role="group" aria-label="Choose budget profile">
+                        <button type="button" id="familyBudgetButton" class="budget-profile-tab budget-profile-tab-family" aria-pressed="false">Family</button>
+                        <button type="button" id="personalBudgetButton" class="budget-profile-tab" aria-pressed="true">Personal</button>
+                    </div>
                 </div>
             </div>
         </header>
@@ -133,6 +136,24 @@
                 <button type="button" id="editProfileButton" class="secondary-button">Edit Profile</button>
                 <button type="button" id="logoutButton" class="danger-button">Logout</button>
             </div>
+            <form id="editProfileForm" class="profile-edit-form" hidden>
+                <h2>Edit Profile</h2>
+                <label for="editProfileName">Full Name</label>
+                <input type="text" id="editProfileName" maxlength="100" required>
+                <label for="editProfileAge">Age</label>
+                <input type="number" id="editProfileAge" min="13" max="120" step="1" required>
+                <label for="editProfileGender">Gender</label>
+                <select id="editProfileGender" required>
+                    <option value="">Select gender</option>
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                </select>
+                <p id="editProfileMessage" role="status"></p>
+                <div class="profile-edit-actions">
+                    <button type="submit" class="primary-button">Save Profile</button>
+                    <button type="button" id="cancelEditProfile" class="secondary-button">Cancel</button>
+                </div>
+            </form>
             <section id="familyManagement" class="family-management">
                 <h2>Family</h2>
                 <p id="familyProfileStatus" class="available-balance-note">Create a family budget or join one with a member’s six digit code.</p>
@@ -162,24 +183,6 @@
                     </form>
                 </div>
             </section>
-            <form id="editProfileForm" class="profile-edit-form" hidden>
-                <h2>Edit Profile</h2>
-                <label for="editProfileName">Full Name</label>
-                <input type="text" id="editProfileName" maxlength="100" required>
-                <label for="editProfileAge">Age</label>
-                <input type="number" id="editProfileAge" min="13" max="120" step="1" required>
-                <label for="editProfileGender">Gender</label>
-                <select id="editProfileGender" required>
-                    <option value="">Select gender</option>
-                    <option value="male">Male</option>
-                    <option value="female">Female</option>
-                </select>
-                <p id="editProfileMessage" role="status"></p>
-                <div class="profile-edit-actions">
-                    <button type="submit" class="primary-button">Save Profile</button>
-                    <button type="button" id="cancelEditProfile" class="secondary-button">Cancel</button>
-                </div>
-            </form>
         </section>
     </section>
 
