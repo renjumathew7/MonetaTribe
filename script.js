@@ -56,6 +56,9 @@ function familySetupRequiredMessage() {
 function familyMembersSetupRequiredMessage() {
     return "Family member listing, restrictions, and Exit Family need setup. Run the latest supabase-family-members-migration.sql in the Supabase Dashboard SQL Editor, then reload the app.";
 }
+function deleteFamilySetupRequiredMessage() {
+    return "Delete Family is not installed in Supabase yet. Run supabase-delete-family-migration.sql in the Supabase Dashboard SQL Editor, then reload the app.";
+}
 function nextBudgetPeriod(previousEndDate, mode = budgetCycleMode, today = localDateISO()) {
     let startDate = addDaysToISO(previousEndDate, 1);
     if (mode === "monthEnd") {
@@ -1337,11 +1340,13 @@ $("deleteFamilyButton")?.addEventListener("click", async () => {
     const confirmed = confirm(`Permanently delete “${family.name}” and all of its shared budgets, pockets, and transactions? This cannot be undone. Personal budgets will remain.`);
     if (!confirmed) return;
     const button = $("deleteFamilyButton");
+    let familyDeleted = false;
     button.disabled = true;
     try {
         await flushPendingCloudSave();
         const { error } = await supabaseClient.rpc("delete_family");
-        if (error) throw new Error(error.code === "PGRST202" ? familyMembersSetupRequiredMessage() : error.message);
+        if (error) throw new Error(error.code === "PGRST202" ? deleteFamilySetupRequiredMessage() : error.message);
+        familyDeleted = true;
         familyMembersCache.delete(family.id);
         budgetProfileCache.delete(`${activeUser.id}:family:${family.id}`);
         activeFamily = null;
@@ -1354,7 +1359,13 @@ $("deleteFamilyButton")?.addEventListener("click", async () => {
         showPage("profilePage");
     } catch (error) {
         console.error("Could not delete family:", error);
-        setText("familyProfileStatus", `Family could not be deleted: ${error.message}`);
+        if (familyDeleted) {
+            renderProfile();
+            showPage("profilePage");
+            setText("familyProfileStatus", `The family was deleted, but your personal budget could not reload: ${error.message}`);
+        } else {
+            setText("familyProfileStatus", `Family could not be deleted: ${error.message}`);
+        }
     } finally {
         if ($("deleteFamilyButton")) $("deleteFamilyButton").disabled = false;
     }
