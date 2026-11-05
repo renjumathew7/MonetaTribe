@@ -1902,10 +1902,7 @@ $("transactionAmount")?.addEventListener("input", event => {
     renderTransactionCalculator();
 });
 $("transactionAmount")?.addEventListener("keydown", event => {
-    if (event.key === "Enter" && !$("transactionCalculator").hidden) {
-        event.preventDefault();
-        enterCalculatedAmount();
-    } else if (event.key === "Escape") {
+    if (event.key === "Escape") {
         event.preventDefault();
         closeTransactionCalculator();
     }
@@ -1945,6 +1942,13 @@ $("transactionCalculator")?.addEventListener("click", event => {
     renderTransactionCalculator();
 });
 $("useCalculatedAmount")?.addEventListener("click", enterCalculatedAmount);
+document.addEventListener("keydown", event => {
+    const calculator = $("transactionCalculator");
+    if (event.key !== "Enter" || !calculator || calculator.hidden) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    enterCalculatedAmount();
+}, true);
 document.addEventListener("click", event => {
     const calculator = $("transactionCalculator");
     if (!calculator || calculator.hidden) return;
