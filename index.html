@@ -98,12 +98,19 @@
             </div>
         </header>
         <div id="demoBudgetNotice" class="demo-notice" hidden><strong>Sample budget</strong><span>These example pockets are here to help you get started. Edit the amounts or replace them with your own budget.</span></div>
-        <section class="summary-card">
-            <p>Total Spent</p>
-            <h2 id="totalSpent">₹0</h2>
+        <section class="summary-card dashboard-summary">
+            <div class="dashboard-summary-heading">
+                <p>Actual Balance</p>
+                <span id="balanceStatusBadge" class="balance-status-chip">No spending recorded this period</span>
+            </div>
+            <h2 id="actualBalance">₹0</h2>
             <div class="summary-details">
-                <div><p>Actual Balance</p><h3 id="actualBalance">₹0</h3></div>
+                <div><p>Total Spent</p><h3 id="totalSpent">₹0</h3></div>
                 <div><p>Days Left</p><h3 id="daysLeft">0</h3></div>
+            </div>
+            <div id="lowBalanceNotice" class="low-balance-notice" role="status" hidden>
+                <span class="low-balance-notice-icon" aria-hidden="true">!</span>
+                <div><strong>Balance running low</strong><span>Less than 30% of your income remains.</span></div>
             </div>
         </section>
         <section class="envelopes-section">
@@ -125,34 +132,23 @@
             <button type="button" id="profileBackToHome" class="text-button">← Dashboard</button>
         </header>
         <section class="summary-card">
-            <dl class="profile-details">
-                <div><dt>Name</dt><dd id="profileName">—</dd></div>
-                <div><dt>Email</dt><dd id="profileEmail">—</dd></div>
-                <div><dt>Phone</dt><dd id="profilePhone">—</dd></div>
-                <div><dt>Age</dt><dd id="profileAge">—</dd></div>
-                <div><dt>Gender</dt><dd id="profileGender">—</dd></div>
-                <div><dt>Account created</dt><dd id="profileCreatedAt">—</dd></div>
-            </dl>
-            <div class="profile-actions">
-                <button type="button" id="editProfileButton" class="secondary-button">Edit Profile</button>
-                <button type="button" id="logoutButton" class="danger-button">Logout</button>
-            </div>
-            <form id="editProfileForm" class="profile-edit-form" hidden>
-                <h2>Edit Profile</h2>
-                <label for="editProfileName">Full Name</label>
-                <input type="text" id="editProfileName" maxlength="100" required>
-                <label for="editProfileAge">Age</label>
-                <input type="number" id="editProfileAge" min="13" max="120" step="1" required>
-                <label for="editProfileGender">Gender</label>
-                <select id="editProfileGender" required>
-                    <option value="">Select gender</option>
-                    <option value="male">Male</option>
-                    <option value="female">Female</option>
-                </select>
-                <p id="editProfileMessage" role="status"></p>
-                <div class="profile-edit-actions">
-                    <button type="submit" class="primary-button">Save Profile</button>
-                    <button type="button" id="cancelEditProfile" class="secondary-button">Cancel</button>
+            <form id="editProfileForm" class="profile-inline-form">
+                <dl class="profile-details">
+                    <div><dt>Name</dt><dd><span id="profileName" class="profile-read-value">—</span><input type="text" id="editProfileName" class="profile-edit-control" aria-label="Full name" maxlength="100" required hidden></dd></div>
+                    <div><dt>Email</dt><dd id="profileEmail">—</dd></div>
+                    <div><dt>Phone</dt><dd id="profilePhone">—</dd></div>
+                    <div><dt>Age</dt><dd><span id="profileAge" class="profile-read-value">—</span><input type="number" id="editProfileAge" class="profile-edit-control" aria-label="Age" min="13" max="120" step="1" required hidden></dd></div>
+                    <div><dt>Gender</dt><dd><span id="profileGender" class="profile-read-value">—</span><select id="editProfileGender" class="profile-edit-control" aria-label="Gender" required hidden><option value="">Select gender</option><option value="male">Male</option><option value="female">Female</option></select></dd></div>
+                    <div><dt>Currency</dt><dd><span id="profileCurrency" class="profile-read-value">INR (₹)</span><select id="editProfileCurrency" class="profile-edit-control" aria-label="Currency" required hidden><option value="INR">INR — Indian Rupee (₹)</option><option value="USD">USD — US Dollar ($)</option></select></dd></div>
+                    <div><dt>Account created</dt><dd id="profileCreatedAt">—</dd></div>
+                </dl>
+                <p class="profile-form-note" id="profileCurrencyNote" hidden>Changing currency changes symbols and number grouping; it does not convert existing amounts.</p>
+                <p id="editProfileMessage" role="status" hidden></p>
+                <div class="profile-actions profile-edit-actions">
+                    <button type="button" id="editProfileButton" class="secondary-button">Edit Profile</button>
+                    <button type="submit" class="primary-button" hidden>Save Profile</button>
+                    <button type="button" id="cancelEditProfile" class="secondary-button" hidden>Cancel</button>
+                    <button type="button" id="logoutButton" class="danger-button">Logout</button>
                 </div>
             </form>
             <section id="familyManagement" class="family-management">
@@ -200,7 +196,7 @@
             </div>
         </section>
         <section class="summary-card">
-            <label for="monthlyIncomeInput">Monthly Income (₹)</label>
+            <label for="monthlyIncomeInput">Monthly Income (<span class="currency-symbol">₹</span>)</label>
             <input type="number" id="monthlyIncomeInput" min="0" step="1" required>
             <h2>Budget Period</h2>
             <div class="history-date-filters">
@@ -230,7 +226,15 @@
             <form id="editEnvelopeForm">
                 <label for="editEnvelopeName">Pocket Name</label>
                 <input type="text" id="editEnvelopeName" maxlength="50" required>
-                <label for="editEnvelopeBudget">Monthly Budget (₹)</label>
+                <div class="pocket-icon-selector">
+                    <span class="pocket-icon-caption">Pocket icon</span>
+                    <details class="pocket-icon-dropdown">
+                        <summary class="pocket-icon-summary"><span id="editPocketIconPreview" class="pocket-icon-summary-badge"></span><span class="pocket-icon-summary-label"><small>Selected icon</small><strong id="editPocketIconName">General</strong></span><span class="pocket-icon-chevron" aria-hidden="true">⌄</span></summary>
+                        <div class="pocket-icon-menu"><div id="editPocketIconPicker" class="pocket-icon-grid" role="radiogroup" aria-label="Pocket icon" data-preview-id="editPocketIconPreview" data-label-id="editPocketIconName"></div></div>
+                    </details>
+                    <input type="hidden" id="editEnvelopeIcon" value="general">
+                </div>
+                <label for="editEnvelopeBudget">Monthly Budget (<span class="currency-symbol">₹</span>)</label>
                 <input type="number" id="editEnvelopeBudget" min="0" step="1" required>
                 <p id="editEnvelopePreviousBudgetNote" class="available-balance-note"></p>
                 <p id="editEnvelopeSpentNote"></p>
@@ -258,7 +262,15 @@
             <form id="addEnvelopeForm">
                 <label for="envelopeName">Pocket Name</label>
                 <input type="text" id="envelopeName" maxlength="50" required placeholder="e.g. Groceries">
-                <label for="envelopeBudget">Monthly Budget (₹)</label>
+                <div class="pocket-icon-selector">
+                    <span class="pocket-icon-caption">Pocket icon</span>
+                    <details class="pocket-icon-dropdown">
+                        <summary class="pocket-icon-summary"><span id="addPocketIconPreview" class="pocket-icon-summary-badge"></span><span class="pocket-icon-summary-label"><small>Selected icon</small><strong id="addPocketIconName">General</strong></span><span class="pocket-icon-chevron" aria-hidden="true">⌄</span></summary>
+                        <div class="pocket-icon-menu"><div id="addPocketIconPicker" class="pocket-icon-grid" role="radiogroup" aria-label="Pocket icon" data-preview-id="addPocketIconPreview" data-label-id="addPocketIconName"></div></div>
+                    </details>
+                    <input type="hidden" id="envelopeIcon" value="general">
+                </div>
+                <label for="envelopeBudget">Monthly Budget (<span class="currency-symbol">₹</span>)</label>
                 <input type="number" id="envelopeBudget" min="1" step="1" required placeholder="Enter budget">
                 <p id="addEnvelopeMessage" role="status"></p>
                 <button type="submit" class="primary-button">Save Pocket</button>
@@ -277,7 +289,7 @@
                 <label for="transactionDate">Date</label>
                 <input type="date" id="transactionDate" required>
                 <div class="transaction-amount-entry">
-                    <label for="transactionAmount">Amount (₹)</label>
+                    <label for="transactionAmount">Amount (<span class="currency-symbol">₹</span>)</label>
                     <input type="text" id="transactionAmount" inputmode="decimal" autocomplete="off" maxlength="64" required aria-controls="transactionCalculator" aria-expanded="false" placeholder="Enter amount">
                     <section id="transactionCalculator" class="transaction-calculator" aria-label="Transaction amount calculator" hidden>
                     <div class="transaction-calculator-keys">
@@ -355,7 +367,7 @@
                 <h2>Modify Transaction</h2>
                 <input type="hidden" id="editTransactionId">
                 <label for="editTransactionDate">Date</label><input type="date" id="editTransactionDate" required>
-                <label for="editTransactionAmount">Amount (₹)</label><input type="number" id="editTransactionAmount" min="1" step="1" required>
+                <label for="editTransactionAmount">Amount (<span class="currency-symbol">₹</span>)</label><input type="number" id="editTransactionAmount" min="1" step="1" required>
                 <label for="editTransactionEnvelope">Pocket</label><select id="editTransactionEnvelope" required></select>
                 <label for="editTransactionDescription">Description</label><input type="text" id="editTransactionDescription" maxlength="100" required>
                 <div class="form-actions"><button type="submit" class="primary-button">Save Changes</button><button type="button" id="cancelEditTransaction" class="secondary-button">Cancel</button></div>
@@ -397,7 +409,7 @@
                     <option value="">Select destination pocket</option>
                 </select>
 
-                <label for="transferAmount">Amount (₹)</label>
+                <label for="transferAmount">Amount (<span class="currency-symbol">₹</span>)</label>
                 <input type="number" id="transferAmount" min="1" step="1" required placeholder="Enter amount">
 
                 <p id="transferMessage" role="status"></p>

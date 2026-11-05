@@ -128,6 +128,94 @@ const defaultEnvelopes = [
     { name: "Entertainment", budget: 2000, spent: 500 }
 ];
 
+const pocketIconDefinitions = {
+    groceries: { label: "Groceries", svg: '<circle cx="9" cy="20" r="1"/><circle cx="18" cy="20" r="1"/><path d="M3 4h2l2.2 11h11.2L21 8H6"/><path d="M10 8v5m4-5v5"/>' },
+    housing: { label: "Home", svg: '<path d="m3 10 9-7 9 7"/><path d="M5 9v12h14V9M9 21v-7h6v7"/>' },
+    transport: { label: "Transport", svg: '<path d="m5 11 1.4-4.2A2 2 0 0 1 8.3 5h7.4a2 2 0 0 1 1.9 1.8L19 11"/><path d="M4 11h16v7H4zM7 18v2m10-2v2M7 14h.01M17 14h.01"/>' },
+    dining: { label: "Dining", svg: '<path d="M7 3v7m-3-7v4a3 3 0 0 0 6 0V3m-3 7v11"/><path d="M17 3v18m0-18c3 2 3 7 0 9"/>' },
+    health: { label: "Health", svg: '<path d="M12 21s-8-4.8-8-11a4.5 4.5 0 0 1 8-2.8A4.5 4.5 0 0 1 20 10c0 6.2-8 11-8 11Z"/><path d="M9 12h6m-3-3v6"/>' },
+    utilities: { label: "Utilities", svg: '<path d="m13 2-9 12h7l-1 8 10-13h-7l1-7Z"/>' },
+    education: { label: "Education", svg: '<path d="M3 5.5A2.5 2.5 0 0 1 5.5 3H12v17H5.5A2.5 2.5 0 0 0 3 22V5.5Zm18 0A2.5 2.5 0 0 0 18.5 3H12v17h6.5a2.5 2.5 0 0 1 2.5 2V5.5Z"/>' },
+    shopping: { label: "Shopping", svg: '<path d="M5 8h14l1 13H4L5 8Z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/>' },
+    entertainment: { label: "Fun", svg: '<path d="M4 5h16v14H4z"/><path d="m9 5-2 14m10-14 2 14M4 9h3m10 0h3M4 15h3m10 0h3"/>' },
+    travel: { label: "Travel", svg: '<rect x="3" y="7" width="18" height="14" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18m-11 0v2h4v-2"/>' },
+    savings: { label: "Savings", svg: '<path d="M5 11a7 7 0 0 1 12-3h3v5h-2a7 7 0 0 1-7 6H8l-3 2v-4a7 7 0 0 1 0-6Z"/><circle cx="13" cy="11" r="1"/><path d="M7 8 5 6M8 18l-1 2"/>' },
+    personal: { label: "Personal care", svg: '<path d="m12 2 1.7 6.3L20 10l-6.3 1.7L12 18l-1.7-6.3L4 10l6.3-1.7L12 2Z"/><path d="m19 16 .8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8L19 16Z"/>' },
+    pets: { label: "Pets", svg: '<circle cx="6.5" cy="8" r="2"/><circle cx="11" cy="5.5" r="2"/><circle cx="16" cy="6" r="2"/><circle cx="19" cy="10" r="2"/><path d="M12 11c-3.8 0-7 5-4.5 7.5 1.5 1.5 3-.5 4.5-.5s3 2 4.5.5C19 16 15.8 11 12 11Z"/>' },
+    gifts: { label: "Gifts", svg: '<path d="M3 10h18v11H3zM2 7h20v4H2zM12 7v14"/><path d="M12 7H8.5a2.5 2.5 0 1 1 2.3-3.5L12 7Zm0 0h3.5a2.5 2.5 0 1 0-2.3-3.5L12 7Z"/>' },
+    general: { label: "General", svg: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>' }
+};
+
+function inferPocketIconKey(name) {
+    const value = String(name || "").toLowerCase();
+    if (/grocer|food/.test(value)) return "groceries";
+    if (/rent|housing|home|house|mortgage|household/.test(value)) return "housing";
+    if (/fuel|transport|car|bus|commute/.test(value)) return "transport";
+    if (/dining|restaurant|cafe|take.?out/.test(value)) return "dining";
+    if (/health|medical|doctor|medicine|pharmacy/.test(value)) return "health";
+    if (/utilit|electric|water|internet|phone|bill/.test(value)) return "utilities";
+    if (/school|education|tuition|course/.test(value)) return "education";
+    if (/shopping|clothing|clothes/.test(value)) return "shopping";
+    if (/entertain|movie|game|hobby/.test(value)) return "entertainment";
+    if (/travel|trip|vacation/.test(value)) return "travel";
+    if (/saving|investment|emergency/.test(value)) return "savings";
+    if (/personal|care|beauty/.test(value)) return "personal";
+    if (/pet/.test(value)) return "pets";
+    if (/gift|donation/.test(value)) return "gifts";
+    return "general";
+}
+function normalizePocketIconKey(key, name) {
+    return Object.prototype.hasOwnProperty.call(pocketIconDefinitions, key) ? key : inferPocketIconKey(name);
+}
+function pocketIconMarkup(key) {
+    const icon = pocketIconDefinitions[normalizePocketIconKey(key)];
+    return '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + icon.svg + "</svg>";
+}
+function renderPocketIconPicker(containerId, inputId, selectedKey) {
+    const container = $(containerId);
+    const input = $(inputId);
+    if (!container || !input) return;
+    container.replaceChildren();
+    input.value = normalizePocketIconKey(selectedKey);
+    const dropdown = container.closest(".pocket-icon-dropdown");
+    const preview = $(container.dataset.previewId);
+    const selectedName = $(container.dataset.labelId);
+    const updateSelection = key => {
+        input.value = key;
+        if (preview) preview.innerHTML = pocketIconMarkup(key);
+        if (selectedName) selectedName.textContent = pocketIconDefinitions[key].label;
+        container.querySelectorAll(".pocket-icon-option").forEach(option => {
+            option.setAttribute("aria-checked", String(option.dataset.iconKey === key));
+        });
+    };
+    Object.entries(pocketIconDefinitions).forEach(([key, icon]) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "pocket-icon-option";
+        button.dataset.iconKey = key;
+        button.setAttribute("role", "radio");
+        button.setAttribute("aria-checked", String(key === input.value));
+        button.setAttribute("aria-label", icon.label);
+        button.title = icon.label;
+        button.innerHTML = pocketIconMarkup(key) + "<span>" + icon.label + "</span>";
+        button.addEventListener("click", () => {
+            updateSelection(key);
+            if (dropdown) {
+                dropdown.open = false;
+                dropdown.querySelector("summary")?.focus();
+            }
+        });
+        container.appendChild(button);
+    });
+    updateSelection(input.value);
+}
+
+document.addEventListener("click", event => {
+    document.querySelectorAll(".pocket-icon-dropdown[open]").forEach(dropdown => {
+        if (!dropdown.contains(event.target)) dropdown.open = false;
+    });
+});
+
 let envelopes = defaultEnvelopes.map(e => ({ ...e }));
 let transactions = [];
 let monthlyIncome = 40000;
@@ -152,7 +240,7 @@ function loadAppData() {
             initializeBudgetDates(localDateISO(), legacyDuration);
         }
         envelopes = envelopes.filter(e => e && typeof e.name === "string")
-            .map(e => ({ name: e.name, budget: Number(e.budget) || 0, spent: Number(e.spent) || 0 }));
+            .map(e => ({ name: e.name, budget: Number(e.budget) || 0, spent: Number(e.spent) || 0, iconKey: normalizePocketIconKey(e.iconKey, e.name) }));
         transactions = transactions.filter(t => t && typeof t === "object");
     } catch (error) {
         console.error("Unable to load saved Moneta Tribe data:", error);
@@ -349,7 +437,7 @@ async function loadCloudData(preferredMode = null) {
         envelope: byId.get(t.envelope_id)?.name || "", source: t.transaction_type === "transfer" ? byId.get(t.envelope_id)?.name : undefined,
         destination: t.transfer_to_envelope_id ? byId.get(t.transfer_to_envelope_id)?.name : undefined
     }));
-    envelopes = (dbEnvelopes || []).map(e => ({ dbId: e.id, name: e.name, budget: Number(e.allocated_budget) || 0, spent: 0 }));
+    envelopes = (dbEnvelopes || []).map(e => ({ dbId: e.id, name: e.name, budget: Number(e.allocated_budget) || 0, spent: 0, iconKey: normalizePocketIconKey(e.icon_key, e.name) }));
     transactions.filter(t => t.type === "expense").forEach(t => { const e = envelopes.find(item => item.name === t.envelope); if (e) e.spent += t.amount; });
     let previousQuery = supabaseClient.from("monthly_budgets").select("id")
         .neq("id", cloudBudgetId).lt("end_date", localDateISO());
@@ -401,6 +489,14 @@ async function persistCloudDataSnapshot() {
     const saveEndDate = budgetEndDate;
     const saveEnvelopes = envelopes.map(envelope => ({ ...envelope }));
     const saveTransactions = transactions.map(transaction => ({ ...transaction }));
+    const iconColumnCheck = await supabaseClient.from("envelopes").select("icon_key").limit(0);
+    if (iconColumnCheck.error) {
+        const error = iconColumnCheck.error;
+        if (error.code === "PGRST204" || error.code === "42703" || /icon_key.*(column|schema cache)/i.test(error.message || "")) {
+            throw new Error("Pocket icon sync needs a one-time database update. Run supabase-pocket-icons-migration.sql in the Supabase SQL Editor, then reload the app.");
+        }
+        throw error;
+    }
     if (saveBudgetId && !saveEnvelopes.length) return;
     let budget;
     let budgetError;
@@ -429,7 +525,7 @@ async function persistCloudDataSnapshot() {
     if (deleteTxError) throw deleteTxError;
     const { error: deleteEnvError } = await supabaseClient.from("envelopes").delete().eq("budget_id", cloudBudgetId);
     if (deleteEnvError) throw deleteEnvError;
-    const rows = saveEnvelopes.map(e => ({ user_id: saveUserId, budget_id: budget.id, name: e.name, allocated_budget: e.budget }));
+    const rows = saveEnvelopes.map(e => ({ user_id: saveUserId, budget_id: budget.id, name: e.name, allocated_budget: e.budget, icon_key: normalizePocketIconKey(e.iconKey, e.name) }));
     const { data: savedEnvelopes, error: insertEnvError } = await supabaseClient.from("envelopes").insert(rows).select("id,name");
     if (insertEnvError) throw insertEnvError;
     const ids = new Map(savedEnvelopes.map(e => [e.name, e.id]));
@@ -447,12 +543,66 @@ async function persistCloudDataSnapshot() {
 loadAppData();
 
 function money(value) {
-    return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(Number(value) || 0);
+    const currency = getCurrency();
+    const locale = currency === "USD" ? "en-US" : "en-IN";
+    return new Intl.NumberFormat(locale, { style: "currency", currency, maximumFractionDigits: 0 }).format(Number(value) || 0);
+}
+function getCurrency() {
+    return String(activeUser?.user_metadata?.monetatribe_currency || "INR").toUpperCase() === "USD" ? "USD" : "INR";
+}
+function currencyLabel(currency = getCurrency()) {
+    return currency === "USD" ? "USD ($)" : "INR (₹)";
+}
+function formatAppDate(value) {
+    if (!value) return "";
+    let year;
+    let month;
+    let day;
+    if (value instanceof Date) {
+        if (Number.isNaN(value.getTime())) return "";
+        year = value.getFullYear();
+        month = value.getMonth() + 1;
+        day = value.getDate();
+    } else {
+        const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (match) [, year, month, day] = match;
+        else {
+            const parsed = new Date(value);
+            if (Number.isNaN(parsed.getTime())) return String(value);
+            year = parsed.getFullYear();
+            month = parsed.getMonth() + 1;
+            day = parsed.getDate();
+        }
+    }
+    const dd = String(day).padStart(2, "0");
+    const mm = String(month).padStart(2, "0");
+    const yyyy = String(year).padStart(4, "0");
+    return (getCurrency() === "USD" ? [mm, dd, yyyy] : [dd, mm, yyyy]).join("-");
+}
+function updateCurrencySymbols() {
+    const symbol = getCurrency() === "USD" ? "$" : "₹";
+    document.querySelectorAll(".currency-symbol").forEach(element => { element.textContent = symbol; });
 }
 function totalBudget() { return envelopes.reduce((sum, e) => sum + e.budget, 0); }
 function totalSpent() { return envelopes.reduce((sum, e) => sum + e.spent, 0); }
 function availableIncome() { return monthlyIncome - totalBudget(); }
 function actualBalance() { return monthlyIncome - totalSpent(); }
+function spendingHabitInsight() {
+    if (monthlyIncome <= 0) return "Add income to compare spending with your budget period";
+    const spent = totalSpent();
+    if (spent <= 0) return "No spending recorded this period";
+    const spentPercent = Math.round((spent / monthlyIncome) * 100);
+    const start = Date.parse(String(budgetStartDate) + "T00:00:00Z");
+    const end = Date.parse(String(budgetEndDate) + "T00:00:00Z");
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return spentPercent + "% of income spent this period";
+    const totalDays = Math.floor((end - start) / 86400000) + 1;
+    const todayTime = Date.parse(localDateISO() + "T00:00:00Z");
+    const elapsedDays = todayTime < start ? 0 : Math.min(totalDays, Math.floor((todayTime - start) / 86400000) + 1);
+    const elapsedPercent = Math.round((elapsedDays / totalDays) * 100);
+    const difference = spentPercent - elapsedPercent;
+    const pace = difference > 10 ? "Ahead of period pace" : difference < -10 ? "Below period pace" : "Close to period pace";
+    return pace + " · " + spentPercent + "% of income spent; " + elapsedPercent + "% of period elapsed";
+}
 function findEnvelope(name) { return envelopes.find(e => e.name === name); }
 function setText(id, value) { const el = $(id); if (el) el.textContent = value; }
 function showPage(id, { fromHistory = false, replaceHistory = false } = {}) {
@@ -478,6 +628,7 @@ window.addEventListener("popstate", event => {
     let pageToShow = targetPage;
     if (!activeUser && !publicPages.includes(pageToShow)) pageToShow = "loginPage";
     else if (activeUser && publicPages.includes(pageToShow) && !passwordRecoveryActive) pageToShow = "homePage";
+    else if (activeUser && !publicPages.includes(pageToShow) && pageToShow !== "homePage") pageToShow = "homePage";
     if (pageToShow !== targetPage) {
         window.history.replaceState({ ...(event.state || {}), monetatribePage: pageToShow }, "", window.location.href);
     }
@@ -489,13 +640,13 @@ document.addEventListener("keydown", event => {
     const target = event.target;
     if (target instanceof HTMLElement && target.isContentEditable) return;
     if (target instanceof HTMLElement && target.closest("input, textarea, select, [role='textbox']")) return;
-    if (!window.history.state?.monetatribePage) return;
+    if (!window.history.state?.monetatribePage || currentVisiblePageId === "homePage") return;
     event.preventDefault();
     window.history.back();
 });
 
-// Native mobile edge swipes use browser history. This supports horizontal swipes
-// away from screen edges without competing with those native gestures.
+// A right swipe returns to the dashboard. Native edge-back gestures are handled
+// by browser history and routed there by the popstate handler above.
 let pageSwipeStart = null;
 document.addEventListener("pointerdown", event => {
     if (event.pointerType !== "touch") return;
@@ -509,9 +660,8 @@ document.addEventListener("pointerup", event => {
     const deltaY = event.clientY - pageSwipeStart.y;
     pageSwipeStart = null;
     if (Math.abs(deltaX) < 90 || Math.abs(deltaY) > 65) return;
-    if (!window.history.state?.monetatribePage) return;
+    if (!window.history.state?.monetatribePage || currentVisiblePageId === "homePage") return;
     if (deltaX > 0) window.history.back();
-    else window.history.forward();
 }, { passive: true });
 document.addEventListener("pointercancel", () => { pageSwipeStart = null; }, { passive: true });
 function setMessage(id, message, isError = true) {
@@ -546,6 +696,7 @@ function makeEnvelopeActions(envelopeName) {
 }
 
 function renderDashboard() {
+    updateCurrencySymbols();
     const demoNotice = $("demoBudgetNotice");
     if (demoNotice) demoNotice.hidden = !isDemoBudget;
     const lastName = getProfileLastName();
@@ -579,8 +730,15 @@ function renderDashboard() {
     document.querySelectorAll("#homePage .dashboard-actions [data-page]").forEach(button => {
         button.hidden = restrictedMember && ["setupPage", "transferPage"].includes(button.dataset.page);
     });
+    const balance = actualBalance();
+    const lowBalance = balance < monthlyIncome * 0.3;
+    $("homePage")?.classList.toggle("low-balance", lowBalance);
     setText("totalSpent", money(totalSpent()));
-    setText("actualBalance", money(actualBalance()));
+    setText("actualBalance", money(balance));
+    const spendingInsight = spendingHabitInsight();
+    setText("balanceStatusBadge", spendingInsight);
+    if ($("balanceStatusBadge")) $("balanceStatusBadge").title = "Compares the share of income spent with the share of the budget period elapsed.";
+    if ($("lowBalanceNotice")) $("lowBalanceNotice").hidden = !lowBalance;
     setText("envelopeCount", `${envelopes.length} ${envelopes.length === 1 ? "pocket" : "pockets"}`);
     const days = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate() - new Date().getDate();
     setText("daysLeft", String(days));
@@ -610,12 +768,19 @@ function renderDashboard() {
         });
         const top = document.createElement("div");
         top.className = "envelope-top";
+        const titleGroup = document.createElement("div");
+        titleGroup.className = "envelope-title-group";
+        const iconBadge = document.createElement("span");
+        iconBadge.className = "envelope-icon-badge";
+        iconBadge.innerHTML = pocketIconMarkup(envelope.iconKey || inferPocketIconKey(envelope.name));
+        iconBadge.setAttribute("aria-hidden", "true");
         const title = document.createElement("h3");
         title.textContent = envelope.name;
+        titleGroup.append(iconBadge, title);
         const balance = document.createElement("p");
         balance.className = overspent ? "envelope-balance envelope-negative-balance" : "envelope-balance";
         balance.textContent = money(envelope.budget - envelope.spent);
-        top.append(title, balance);
+        top.append(titleGroup, balance);
         const progress = document.createElement("div");
         progress.className = overspent ? "progress-track progress-over-budget" : "progress-track";
         const fill = document.createElement("div");
@@ -623,7 +788,14 @@ function renderDashboard() {
         const progressPercent = overspent
             ? (envelope.budget > 0 ? ((envelope.spent - envelope.budget) / envelope.budget) * 100 : 100)
             : (envelope.budget > 0 ? ((envelope.budget - envelope.spent) / envelope.budget) * 100 : 0);
-        fill.style.width = `${Math.max(0, Math.min(100, progressPercent))}%`;
+        const remainingPercent = envelope.budget > 0
+            ? Math.max(0, Math.min(100, ((envelope.budget - envelope.spent) / envelope.budget) * 100))
+            : (envelope.spent > 0 ? 0 : 100);
+        const spentPercent = envelope.budget > 0
+            ? Math.max(0, (envelope.spent / envelope.budget) * 100)
+            : (envelope.spent > 0 ? 100 : 0);
+        fill.style.width = `${Math.max(overspent || remainingPercent === 0 ? 1.5 : 0, Math.min(100, progressPercent))}%`;
+        fill.style.setProperty("--progress-color", overspent ? "#dc2626" : getProgressSpectrumColor(spentPercent));
         progress.appendChild(fill);
         const amounts = document.createElement("div");
         amounts.className = "envelope-amounts";
@@ -635,6 +807,17 @@ function renderDashboard() {
         card.append(top, progress, amounts);
         list.appendChild(card);
     });
+}
+
+function getProgressSpectrumColor(percent) {
+    const stops = ["#176b55", "#84cc16", "#eab308", "#f97316", "#dc2626"];
+    const position = (Math.max(0, Math.min(100, percent)) / 100) * (stops.length - 1);
+    const startIndex = Math.min(stops.length - 2, Math.floor(position));
+    const blend = position - startIndex;
+    const start = stops[startIndex].match(/[\da-f]{2}/gi).map(value => parseInt(value, 16));
+    const end = stops[startIndex + 1].match(/[\da-f]{2}/gi).map(value => parseInt(value, 16));
+    const rgb = start.map((value, index) => Math.round(value + (end[index] - value) * blend));
+    return `rgb(${rgb.join(", ")})`;
 }
 
 function openPocketExpenseHistory(pocketName) {
@@ -676,17 +859,36 @@ function getUserAvatar() {
     return { path: `avatars/adult-${female ? "woman" : "man"}.svg`, label: female ? "Adult woman avatar" : "Adult man avatar" };
 }
 
+function setProfileEditing(isEditing) {
+    const form = $("editProfileForm");
+    if (!form) return;
+    form.classList.toggle("is-editing", isEditing);
+    form.querySelectorAll(".profile-edit-control").forEach(control => { control.hidden = !isEditing; });
+    $("profileName").hidden = isEditing;
+    $("profileAge").hidden = isEditing;
+    $("profileGender").hidden = isEditing;
+    $("profileCurrency").hidden = isEditing;
+    $("editProfileButton").hidden = isEditing;
+    form.querySelector('button[type="submit"]').hidden = !isEditing;
+    $("cancelEditProfile").hidden = !isEditing;
+    $("profileCurrencyNote").hidden = !isEditing;
+    $("editProfileMessage").hidden = !isEditing;
+}
+
 function renderProfile() {
     const metadata = activeUser?.user_metadata || {};
+    setProfileEditing(false);
+    updateCurrencySymbols();
     const fullName = getProfileFullName();
     setText("profileName", fullName || "Not provided");
     setText("profileEmail", activeUser?.email || "Not available");
     setText("profilePhone", activeUser?.phone || metadata.phone || metadata.phone_number || "Not provided");
     setText("profileAge", metadata.age ? `${metadata.age} years` : "Not provided");
     setText("profileGender", metadata.gender ? (String(metadata.gender).charAt(0).toUpperCase() + String(metadata.gender).slice(1)) : "Not provided");
+    setText("profileCurrency", currencyLabel());
     const createdAt = activeUser?.created_at ? new Date(activeUser.created_at) : null;
     const createdAtText = createdAt && !Number.isNaN(createdAt.getTime())
-        ? new Intl.DateTimeFormat("en-IN", { dateStyle: "long" }).format(createdAt)
+        ? formatAppDate(createdAt)
         : "Not available";
     setText("profileCreatedAt", createdAtText);
     const hasFamily = Boolean(activeFamily);
@@ -730,7 +932,7 @@ function renderFamilyMemberRows(container, members) {
         const joined = document.createElement("small");
         const joinedAt = member.joined_at ? new Date(member.joined_at) : null;
         joined.textContent = joinedAt && !Number.isNaN(joinedAt.getTime())
-            ? `Joined ${new Intl.DateTimeFormat("en-IN", { dateStyle: "medium" }).format(joinedAt)}`
+            ? "Joined " + formatAppDate(joinedAt)
             : "Family member";
         info.append(name, joined);
         row.append(avatar, info);
@@ -863,10 +1065,24 @@ function renderSetup() {
     list.replaceChildren();
     envelopes.forEach(envelope => {
         const row = document.createElement("div");
-        row.className = "setup-envelope-item";
-        const details = document.createElement("span");
-        details.textContent = `${envelope.name} — ${money(envelope.budget)} budget · ${money(envelope.spent)} spent`;
-        row.append(details, makeEnvelopeActions(envelope.name));
+        row.className = "setup-pocket-row";
+        const identity = document.createElement("div");
+        identity.className = "setup-pocket-name";
+        const iconBadge = document.createElement("span");
+        iconBadge.className = "setup-envelope-icon";
+        iconBadge.innerHTML = pocketIconMarkup(envelope.iconKey || inferPocketIconKey(envelope.name));
+        iconBadge.setAttribute("aria-hidden", "true");
+        const name = document.createElement("strong");
+        name.textContent = envelope.name;
+        identity.append(iconBadge, name);
+        const budgetMetric = document.createElement("div");
+        budgetMetric.className = "setup-pocket-budget";
+        const budgetLabel = document.createElement("span");
+        budgetLabel.textContent = "Budgeted";
+        const budgetAmount = document.createElement("strong");
+        budgetAmount.textContent = money(envelope.budget);
+        budgetMetric.append(budgetLabel, budgetAmount);
+        row.append(identity, budgetMetric, makeEnvelopeActions(envelope.name));
         list.appendChild(row);
     });
     const total = document.createElement("p");
@@ -888,6 +1104,7 @@ function openEditEnvelope(name) {
     if (!envelope) return;
     editingEnvelopeName = envelope.name;
     $("editEnvelopeName").value = envelope.name;
+    renderPocketIconPicker("editPocketIconPicker", "editEnvelopeIcon", envelope.iconKey || inferPocketIconKey(envelope.name));
     const hasPreviousBudget = Object.prototype.hasOwnProperty.call(previousEnvelopeBudgets, envelope.name);
     const suggestedBudget = Number(previousEnvelopeBudgets[envelope.name]);
     $("editEnvelopeBudget").value = envelope.budget > 0 ? envelope.budget : (hasPreviousBudget ? suggestedBudget : envelope.budget);
@@ -903,6 +1120,7 @@ function saveEnvelopeEdits() {
     if (!envelope) return setMessage("editEnvelopeMessage", "Pocket not found.");
     const newName = $("editEnvelopeName").value.trim();
     const newBudget = Number($("editEnvelopeBudget").value);
+    const newIconKey = normalizePocketIconKey($("editEnvelopeIcon").value, newName);
     if (!newName) return setMessage("editEnvelopeMessage", "Enter a pocket name.");
     if (envelopes.some(e => e !== envelope && e.name.toLowerCase() === newName.toLowerCase())) return setMessage("editEnvelopeMessage", "A pocket with this name already exists.");
     if (!Number.isFinite(newBudget) || newBudget < 0) return setMessage("editEnvelopeMessage", "Budget must be zero or greater.");
@@ -910,6 +1128,7 @@ function saveEnvelopeEdits() {
     const oldName = envelope.name;
     envelope.name = newName;
     envelope.budget = newBudget;
+    envelope.iconKey = newIconKey;
     if (Object.prototype.hasOwnProperty.call(previousEnvelopeBudgets, oldName)) {
         previousEnvelopeBudgets[newName] = previousEnvelopeBudgets[oldName];
         if (newName !== oldName) delete previousEnvelopeBudgets[oldName];
@@ -1024,7 +1243,7 @@ function renderHistory() {
         const details = document.createElement("div"); details.className = "transaction-main-details";
         const desc = document.createElement("strong"); desc.textContent = t.description || (t.type === "transfer" ? "Budget transfer" : "Expense");
         const category = document.createElement("span"); category.textContent = t.type === "transfer" ? `${t.source} → ${t.destination}` : (t.envelope || "—");
-        const date = document.createElement("span"); date.className = "transaction-date"; date.textContent = t.date || "";
+        const date = document.createElement("span"); date.className = "transaction-date"; date.textContent = formatAppDate(t.date);
         details.append(desc, category, date);
         const amount = document.createElement("strong"); amount.className = "transaction-amount"; amount.textContent = money(t.amount);
         row.append(details, amount);
@@ -1176,9 +1395,9 @@ function openTransactionEditor(transaction) {
 
 function saveEditedTransaction(event) {
     event.preventDefault();
-    const id = Number($("editTransactionId").value);
-    const old = transactions.find(t => t.id === id);
-    if (!old || old.type === "transfer") return;
+    const id = $("editTransactionId").value;
+    const old = transactions.find(t => String(t.id) === id);
+    if (!old || old.type === "transfer") return setMessage("editTransactionMessage", "This transaction could not be found. Refresh the history and try again.");
     const nextEnvelope = findEnvelope($("editTransactionEnvelope").value);
     const amount = Number($("editTransactionAmount").value);
     const date = $("editTransactionDate").value;
@@ -1193,6 +1412,7 @@ function saveEditedTransaction(event) {
     refreshAll();
     historyManageMode = true;
     renderHistory();
+    setMessage("historyManagementMessage", "Transaction changes saved.", false);
 }
 
 function reverseTransaction(t) {
@@ -1608,35 +1828,34 @@ $("editProfileButton")?.addEventListener("click", () => {
     $("editProfileName").value = getProfileFullName();
     $("editProfileAge").value = metadata.age || "";
     $("editProfileGender").value = metadata.gender || "";
-    $("editProfileForm").hidden = false;
-    $("editProfileButton").hidden = true;
+    $("editProfileCurrency").value = getCurrency();
     clearMessage("editProfileMessage");
+    setProfileEditing(true);
 });
 $("cancelEditProfile")?.addEventListener("click", () => {
-    $("editProfileForm").hidden = true;
-    $("editProfileButton").hidden = false;
     clearMessage("editProfileMessage");
+    renderProfile();
 });
 $("editProfileForm")?.addEventListener("submit", async event => {
     event.preventDefault();
     const fullName = $("editProfileName").value.trim();
     const age = Number($("editProfileAge").value);
     const gender = $("editProfileGender").value;
+    const currency = $("editProfileCurrency").value;
     if (!fullName) return setMessage("editProfileMessage", "Enter your full name.");
     if (!Number.isInteger(age) || age < 13 || age > 120) return setMessage("editProfileMessage", "Enter an age from 13 to 120.");
     if (gender !== "male" && gender !== "female") return setMessage("editProfileMessage", "Select a gender.");
+    if (currency !== "INR" && currency !== "USD") return setMessage("editProfileMessage", "Select INR or USD.");
     const submitButton = $("editProfileForm").querySelector('button[type="submit"]');
     submitButton.disabled = true;
     setMessage("editProfileMessage", "Saving profile…", false);
     const metadata = activeUser?.user_metadata || {};
     const { data, error } = await supabaseClient.auth.updateUser({
-        data: { ...metadata, full_name: fullName, age, gender }
+        data: { ...metadata, full_name: fullName, age, gender, monetatribe_currency: currency }
     });
     submitButton.disabled = false;
     if (error) return setMessage("editProfileMessage", error.message);
     activeUser = data.user;
-    $("editProfileForm").hidden = true;
-    $("editProfileButton").hidden = false;
     renderProfile();
     renderDashboard();
     clearMessage("editProfileMessage");
@@ -1711,20 +1930,23 @@ $("addEnvelopeButton")?.addEventListener("click", () => {
     renderAddEnvelopeSummary();
     clearMessage("addEnvelopeMessage");
     $("addEnvelopeForm")?.reset();
+    renderPocketIconPicker("addPocketIconPicker", "envelopeIcon", "general");
     showPage("addEnvelopePage");
 });
 
 function submitEnvelope(addAnother = false) {
     const name = $("envelopeName")?.value.trim();
     const budget = Number($("envelopeBudget")?.value);
+    const iconKey = normalizePocketIconKey($("envelopeIcon")?.value, name);
     if (!name) return setMessage("addEnvelopeMessage", "Enter a pocket name.");
     if (envelopes.some(e => e.name.toLowerCase() === name.toLowerCase())) return setMessage("addEnvelopeMessage", "A pocket with this name already exists.");
     if (!Number.isFinite(budget) || budget <= 0) return setMessage("addEnvelopeMessage", "Enter a budget greater than zero.");
     if (totalBudget() + budget > monthlyIncome) return setMessage("addEnvelopeMessage", "This exceeds your unallocated monthly income.");
-    envelopes.push({ name, budget, spent: 0 });
+    envelopes.push({ name, budget, spent: 0, iconKey });
     refreshAll();
     if (addAnother) {
         $("addEnvelopeForm")?.reset();
+        renderPocketIconPicker("addPocketIconPicker", "envelopeIcon", "general");
         renderAddEnvelopeSummary();
         setMessage("addEnvelopeMessage", "Pocket saved. You can add another.", false);
     } else {

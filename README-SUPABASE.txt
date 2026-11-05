@@ -20,3 +20,6 @@ Run locally:
 4. Log in using your confirmed Supabase email and password.
 
 The Supabase JavaScript library is loaded from jsDelivr, so an internet connection is required.
+
+Pocket icons:
+Run supabase-pocket-icons-migration.sql once in the Supabase Dashboard SQL Editor to add the Pocket icon field. This is an additive change and keeps existing budgets, Pockets, and transactions. The app uses it to persist the selected icon for Personal and Family budgets.
