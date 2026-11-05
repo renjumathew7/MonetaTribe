@@ -23,6 +23,7 @@ let cloudSaveInFlight = Promise.resolve();
 const budgetProfileCache = new Map();
 const familyMembersCache = new Map();
 const familyMembersLoading = new Set();
+const familyMembersPromises = new Map();
 let familyMembershipLoadedUserId = null;
 const budgetProfileCacheTtlMs = 30000;
 let isDemoBudget = false;
@@ -31,6 +32,7 @@ let budgetEndDate = "";
 let budgetCycleMode = "30days";
 let previousEnvelopeBudgets = {};
 let historyViewingArchive = false;
+let historyPocketFilter = null;
 let archivedTransactions = [];
 let archivedBudgetIds = [];
 let archiveManageMode = false;
@@ -130,6 +132,8 @@ let envelopes = defaultEnvelopes.map(e => ({ ...e }));
 let transactions = [];
 let monthlyIncome = 40000;
 let historyManageMode = false;
+let currentVisiblePageId = null;
+let initialPageResolved = false;
 
 function loadAppData() {
     try {
@@ -341,7 +345,7 @@ async function loadCloudData(preferredMode = null) {
     if (txError) throw txError;
     const byId = new Map((dbEnvelopes || []).map(e => [e.id, e]));
     transactions = (dbTransactions || []).map(t => ({
-        id: t.id, type: t.transaction_type, date: t.transaction_date, amount: Number(t.amount), description: t.description || "",
+        id: t.id, userId: t.user_id, type: t.transaction_type, date: t.transaction_date, amount: Number(t.amount), description: t.description || "",
         envelope: byId.get(t.envelope_id)?.name || "", source: t.transaction_type === "transfer" ? byId.get(t.envelope_id)?.name : undefined,
         destination: t.transfer_to_envelope_id ? byId.get(t.transfer_to_envelope_id)?.name : undefined
     }));
@@ -433,7 +437,7 @@ async function persistCloudDataSnapshot() {
     const txRows = saveTransactions.map(t => {
         const transfer = t.type === "transfer";
         const sourceName = transfer ? t.source : t.envelope;
-        return { user_id: saveUserId, budget_id: budget.id, envelope_id: ids.get(sourceName),
+        return { user_id: t.userId || saveUserId, budget_id: budget.id, envelope_id: ids.get(sourceName),
             transfer_to_envelope_id: transfer ? ids.get(t.destination) : null, transaction_type: transfer ? "transfer" : "expense",
             transaction_date: t.date, description: t.description || "", amount: t.amount };
     }).filter(t => t.envelope_id);
@@ -451,14 +455,65 @@ function availableIncome() { return monthlyIncome - totalBudget(); }
 function actualBalance() { return monthlyIncome - totalSpent(); }
 function findEnvelope(name) { return envelopes.find(e => e.name === name); }
 function setText(id, value) { const el = $(id); if (el) el.textContent = value; }
-function showPage(id) {
+function showPage(id, { fromHistory = false, replaceHistory = false } = {}) {
     if (isRestrictedFamilyMember() && ["setupPage", "editEnvelopePage", "addEnvelopePage", "transferPage"].includes(id)) {
         setText("familyProfileStatus", familyAdminOnlyMessage());
         id = "homePage";
     }
+    if (!fromHistory && id !== currentVisiblePageId) {
+        const pageState = { ...(window.history.state || {}), monetatribePage: id };
+        if (id === "sessionLoadingPage" || !initialPageResolved || replaceHistory) window.history.replaceState(pageState, "", window.location.href);
+        else window.history.pushState(pageState, "", window.location.href);
+    }
     pageIds.forEach(pageId => { const el = $(pageId); if (el) el.hidden = pageId !== id; });
+    currentVisiblePageId = id;
+    if (id !== "sessionLoadingPage") initialPageResolved = true;
     window.scrollTo({ top: 0, behavior: "auto" });
 }
+
+window.addEventListener("popstate", event => {
+    const targetPage = event.state?.monetatribePage;
+    if (!pageIds.includes(targetPage)) return;
+    const publicPages = ["sessionLoadingPage", "loginPage", "createAccountPage", "resetPasswordPage"];
+    let pageToShow = targetPage;
+    if (!activeUser && !publicPages.includes(pageToShow)) pageToShow = "loginPage";
+    else if (activeUser && publicPages.includes(pageToShow) && !passwordRecoveryActive) pageToShow = "homePage";
+    if (pageToShow !== targetPage) {
+        window.history.replaceState({ ...(event.state || {}), monetatribePage: pageToShow }, "", window.location.href);
+    }
+    showPage(pageToShow, { fromHistory: true });
+});
+
+document.addEventListener("keydown", event => {
+    if (event.key !== "Backspace" || event.altKey || event.ctrlKey || event.metaKey) return;
+    const target = event.target;
+    if (target instanceof HTMLElement && target.isContentEditable) return;
+    if (target instanceof HTMLElement && target.closest("input, textarea, select, [role='textbox']")) return;
+    if (!window.history.state?.monetatribePage) return;
+    event.preventDefault();
+    window.history.back();
+});
+
+// Native mobile edge swipes use browser history. This supports horizontal swipes
+// away from screen edges without competing with those native gestures.
+let pageSwipeStart = null;
+document.addEventListener("pointerdown", event => {
+    if (event.pointerType !== "touch") return;
+    if (event.target instanceof Element && event.target.closest("button, a, input, textarea, select, [contenteditable='true'], .envelope-card-clickable")) return;
+    if (event.clientX < 28 || event.clientX > window.innerWidth - 28) return;
+    pageSwipeStart = { x: event.clientX, y: event.clientY };
+}, { passive: true });
+document.addEventListener("pointerup", event => {
+    if (!pageSwipeStart || event.pointerType !== "touch") { pageSwipeStart = null; return; }
+    const deltaX = event.clientX - pageSwipeStart.x;
+    const deltaY = event.clientY - pageSwipeStart.y;
+    pageSwipeStart = null;
+    if (Math.abs(deltaX) < 90 || Math.abs(deltaY) > 65) return;
+    if (!window.history.state?.monetatribePage) return;
+    if (deltaX > 0) window.history.back();
+    else window.history.forward();
+}, { passive: true });
+document.addEventListener("pointercancel", () => { pageSwipeStart = null; }, { passive: true });
 function setMessage(id, message, isError = true) {
     const el = $(id);
     if (!el) return;
@@ -543,6 +598,16 @@ function renderDashboard() {
         const overspent = envelope.spent > envelope.budget;
         const card = document.createElement("article");
         card.className = overspent ? "envelope-card envelope-over-budget" : "envelope-card";
+        card.classList.add("envelope-card-clickable");
+        card.tabIndex = 0;
+        card.setAttribute("role", "button");
+        card.setAttribute("aria-label", `View expenses for ${envelope.name}`);
+        card.addEventListener("click", () => openPocketExpenseHistory(envelope.name));
+        card.addEventListener("keydown", event => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            openPocketExpenseHistory(envelope.name);
+        });
         const top = document.createElement("div");
         top.className = "envelope-top";
         const title = document.createElement("h3");
@@ -570,6 +635,19 @@ function renderDashboard() {
         card.append(top, progress, amounts);
         list.appendChild(card);
     });
+}
+
+function openPocketExpenseHistory(pocketName) {
+    historyPocketFilter = pocketName;
+    historyViewingArchive = false;
+    archivedTransactions = [];
+    archivedBudgetIds = [];
+    historyManageMode = false;
+    archiveManageMode = false;
+    clearMessage("historyArchiveMessage");
+    if ($("editTransactionForm")) $("editTransactionForm").hidden = true;
+    renderHistory();
+    showPage("historyPage");
 }
 
 function getProfileFullName() {
@@ -640,7 +718,10 @@ function renderFamilyMemberRows(container, members) {
         const avatar = document.createElement("span");
         avatar.className = "family-member-avatar";
         avatar.setAttribute("aria-hidden", "true");
-        avatar.textContent = String(member.display_name || "M").trim().split(/\s+/).slice(0, 2).map(part => part[0]?.toUpperCase() || "").join("");
+        const appearance = familyTransactionAuthor(member.member_user_id);
+        avatar.textContent = appearance.initials;
+        avatar.style.backgroundColor = appearance.background;
+        avatar.style.color = appearance.foreground;
         const info = document.createElement("span");
         info.className = "family-member-info";
         const name = document.createElement("strong");
@@ -693,40 +774,75 @@ async function setFamilyMemberRestriction(member, restricted, button) {
 }
 
 async function loadFamilyMembers() {
-    if (!activeFamily) return;
+    if (!activeFamily) return [];
     const familyId = activeFamily.id;
     const containers = [$("familyMemberList")].filter(Boolean);
     const cached = familyMembersCache.get(familyId);
     if (cached && Date.now() - cached.savedAt < 60000) {
         containers.forEach(container => renderFamilyMemberRows(container, cached.members));
         setText("familyMemberCount", `${cached.members.length} ${cached.members.length === 1 ? "member" : "members"}`);
-        return;
+        return cached.members;
     }
-    if (familyMembersLoading.has(familyId)) return;
-    familyMembersLoading.add(familyId);
-    containers.forEach(container => { container.textContent = "Loading family members…"; });
-    try {
-        const { data, error } = await supabaseClient.rpc("get_family_members");
-        if (familyId !== activeFamily?.id) return;
-        if (error) {
-            const message = error.code === "PGRST202" ? familyMembersSetupRequiredMessage() : `Could not load family members: ${error.message}`;
-            containers.forEach(container => { container.textContent = message; });
-            return;
-        }
-        const members = Array.isArray(data) ? data : [];
-        familyMembersCache.set(familyId, { savedAt: Date.now(), members });
-        const self = members.find(member => member.member_user_id === activeUser?.id);
-        if (self) {
-            activeFamilyRole = self.role;
-            activeFamilyRestricted = Boolean(self.is_restricted);
-        }
-        containers.forEach(container => renderFamilyMemberRows(container, members));
-        setText("familyMemberCount", `${members.length} ${members.length === 1 ? "member" : "members"}`);
-    } catch (error) {
-        containers.forEach(container => { container.textContent = `Could not load family members: ${error.message}`; });
-    } finally {
-        familyMembersLoading.delete(familyId);
+
+    let request = familyMembersPromises.get(familyId);
+    if (!request) {
+        familyMembersLoading.add(familyId);
+        containers.forEach(container => { container.textContent = "Loading family members…"; });
+        request = (async () => {
+            try {
+                const { data, error } = await supabaseClient.rpc("get_family_members");
+                if (familyId !== activeFamily?.id) return [];
+                if (error) {
+                    const message = error.code === "PGRST202" ? familyMembersSetupRequiredMessage() : `Could not load family members: ${error.message}`;
+                    containers.forEach(container => { container.textContent = message; });
+                    return [];
+                }
+                const members = Array.isArray(data) ? data : [];
+                familyMembersCache.set(familyId, { savedAt: Date.now(), members });
+                const self = members.find(member => member.member_user_id === activeUser?.id);
+                if (self) {
+                    activeFamilyRole = self.role;
+                    activeFamilyRestricted = Boolean(self.is_restricted);
+                }
+                containers.forEach(container => renderFamilyMemberRows(container, members));
+                setText("familyMemberCount", `${members.length} ${members.length === 1 ? "member" : "members"}`);
+                return members;
+            } catch (error) {
+                containers.forEach(container => { container.textContent = `Could not load family members: ${error.message}`; });
+                return [];
+            } finally {
+                familyMembersLoading.delete(familyId);
+                familyMembersPromises.delete(familyId);
+            }
+        })();
+        familyMembersPromises.set(familyId, request);
     }
+    return request;
+}
+
+function familyTransactionAuthor(userId) {
+    const members = activeFamily ? familyMembersCache.get(activeFamily.id)?.members || [] : [];
+    const member = members.find(item => item.member_user_id === userId);
+    const name = member?.display_name || (userId === activeUser?.id ? getProfileFullName() : "Family member");
+    const nameParts = String(name || "Family member").trim().split(/\s+/).filter(Boolean);
+    const initials = nameParts.length > 1
+        ? `${nameParts[0][0]}${nameParts[nameParts.length - 1][0]}`.toUpperCase()
+        : (nameParts[0]?.[0] || "?").toUpperCase();
+    const seed = `${activeFamily?.id || "family"}:${userId || "unknown"}`;
+    let hash = 2166136261;
+    for (let i = 0; i < seed.length; i++) hash = Math.imul(hash ^ seed.charCodeAt(i), 16777619);
+    const hue = (hash >>> 0) % 360;
+    return { name, initials, background: `hsl(${hue} 72% 88%)`, foreground: `hsl(${hue} 55% 27%)` };
+}
+
+function ensureHistoryFamilyMembersLoaded() {
+    if (budgetProfileMode !== "family" || !activeFamily) return;
+    const familyId = activeFamily.id;
+    const cached = familyMembersCache.get(familyId);
+    if (cached && Date.now() - cached.savedAt < 60000) return;
+    loadFamilyMembers().then(members => {
+        if (members.length && currentVisiblePageId === "historyPage" && familyId === activeFamily?.id) renderHistory();
+    });
 }
 
 function renderSetup() {
@@ -848,35 +964,63 @@ function renderHistory() {
         historyManageMode = false;
         archiveManageMode = false;
     }
+    ensureHistoryFamilyMembersLoaded();
     list.replaceChildren();
     const archiveFrom = $("previousTransactionsFrom")?.value || "";
     const archiveTo = $("previousTransactionsTo")?.value || "";
     const invalidArchiveRange = historyViewingArchive && archiveFrom && archiveTo && archiveFrom > archiveTo;
-    const archivedMatches = archivedTransactions.filter(t => (!archiveFrom || String(t.date || "") >= archiveFrom) && (!archiveTo || String(t.date || "") <= archiveTo));
-    const shownTransactions = historyViewingArchive ? archivedMatches : transactions;
-    setText("historyCount", `${shownTransactions.length} ${shownTransactions.length === 1 ? "transaction" : "transactions"}${historyViewingArchive ? " in previous budgets" : ""}`);
-    setText("historyEmptyMessage", invalidArchiveRange ? "From date must be on or before To date." : shownTransactions.length ? "" : (historyViewingArchive ? (archivedTransactions.length ? "No previous transactions match these dates." : "No previous transactions have been recorded.") : "No transactions recorded yet."));
+    const currentOrArchived = historyViewingArchive
+        ? archivedTransactions.filter(t => (!archiveFrom || String(t.date || "") >= archiveFrom) && (!archiveTo || String(t.date || "") <= archiveTo))
+        : transactions;
+    const shownTransactions = historyPocketFilter
+        ? currentOrArchived.filter(t => t.type === "expense" && t.envelope === historyPocketFilter)
+        : currentOrArchived;
+    const countLabel = historyPocketFilter
+        ? `${shownTransactions.length} ${shownTransactions.length === 1 ? "expense" : "expenses"} · ${historyPocketFilter}`
+        : `${shownTransactions.length} ${shownTransactions.length === 1 ? "transaction" : "transactions"}`;
+    setText("historyCount", `${countLabel}${historyViewingArchive ? " · Previous budgets" : ""}`);
+    setText("historyTitle", historyPocketFilter || "Transaction History");
+    setText("historySubtitle", historyPocketFilter ? "Expenses" : "Review your recorded transactions");
+    setText("historyPocketFilterText", `Showing expenses for ${historyPocketFilter || ""}`);
+    const filterNotice = $("historyPocketFilterNotice");
+    if (filterNotice) filterNotice.hidden = !historyPocketFilter;
+    const emptyMessage = historyPocketFilter
+        ? historyViewingArchive ? `No previous expenses for ${historyPocketFilter} match these dates.` : `No expenses for ${historyPocketFilter} in this budget period.`
+        : historyViewingArchive ? (archivedTransactions.length ? "No previous transactions match these dates." : "No previous transactions have been recorded.") : "No transactions recorded yet.";
+    setText("historyEmptyMessage", invalidArchiveRange ? "From date must be on or before To date." : shownTransactions.length ? "" : emptyMessage);
     const toggle = $("toggleHistoryManagement");
     if (toggle) toggle.textContent = historyManageMode ? "Done" : "Edit Transactions";
-    if (toggle) toggle.hidden = historyViewingArchive || restrictedMember;
+    if (toggle) toggle.hidden = historyViewingArchive || restrictedMember || Boolean(historyPocketFilter);
     const previousToggle = $("togglePreviousTransactions");
     if (previousToggle) previousToggle.textContent = historyViewingArchive ? "View Current Transactions" : "Previous Transactions";
     const archiveFilters = $("previousTransactionsFilters");
     if (archiveFilters) archiveFilters.hidden = !historyViewingArchive;
     const archiveActions = $("previousTransactionsActions");
-    if (archiveActions) archiveActions.hidden = !historyViewingArchive;
+    if (archiveActions) archiveActions.hidden = !historyViewingArchive || restrictedMember || Boolean(historyPocketFilter);
     const archiveManageToggle = $("togglePreviousTransactionsManagement");
     if (archiveManageToggle) archiveManageToggle.textContent = archiveManageMode ? "Done Editing Previous Transactions" : "Edit Previous Transactions";
-    if (archiveManageToggle) archiveManageToggle.hidden = restrictedMember;
+    if (archiveManageToggle) archiveManageToggle.hidden = restrictedMember || Boolean(historyPocketFilter);
     const deleteAllArchiveButton = $("deleteAllPreviousTransactions");
-    if (deleteAllArchiveButton) deleteAllArchiveButton.hidden = restrictedMember || !archiveManageMode || archivedTransactions.length === 0;
+    if (deleteAllArchiveButton) deleteAllArchiveButton.hidden = restrictedMember || Boolean(historyPocketFilter) || !archiveManageMode || archivedTransactions.length === 0;
     const panel = $("historyManagementPanel");
-    if (panel) panel.hidden = restrictedMember || !historyManageMode || historyViewingArchive;
+    if (panel) panel.hidden = restrictedMember || Boolean(historyPocketFilter) || !historyManageMode || historyViewingArchive;
     const editForm = $("editTransactionForm");
     if (historyViewingArchive && editForm) editForm.hidden = true;
     [...shownTransactions].sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))).forEach(t => {
         const row = document.createElement("div");
         row.className = "transaction-item";
+        let authorAvatar = null;
+        if (budgetProfileMode === "family" && activeFamily) {
+            const author = familyTransactionAuthor(t.userId || activeUser?.id);
+            authorAvatar = document.createElement("span");
+            authorAvatar.className = "family-transaction-author";
+            authorAvatar.setAttribute("role", "img");
+            authorAvatar.setAttribute("aria-label", `${author.name} entered this ${t.type === "expense" ? "expense" : "transaction"}`);
+            authorAvatar.title = `${author.name} entered this ${t.type === "expense" ? "expense" : "transaction"}`;
+            authorAvatar.textContent = author.initials;
+            authorAvatar.style.backgroundColor = author.background;
+            authorAvatar.style.color = author.foreground;
+        }
         const details = document.createElement("div"); details.className = "transaction-main-details";
         const desc = document.createElement("strong"); desc.textContent = t.description || (t.type === "transfer" ? "Budget transfer" : "Expense");
         const category = document.createElement("span"); category.textContent = t.type === "transfer" ? `${t.source} → ${t.destination}` : (t.envelope || "—");
@@ -884,6 +1028,7 @@ function renderHistory() {
         details.append(desc, category, date);
         const amount = document.createElement("strong"); amount.className = "transaction-amount"; amount.textContent = money(t.amount);
         row.append(details, amount);
+        if (authorAvatar) row.appendChild(authorAvatar);
         if (historyManageMode && !historyViewingArchive) {
             const actions = document.createElement("div"); actions.className = "transaction-actions";
             if (t.type !== "transfer") {
@@ -948,7 +1093,7 @@ async function togglePreviousBudgetTransactions() {
     const dbTransactions = transactionPages.flat();
     const envelopeNames = new Map((dbEnvelopes || []).map(e => [e.id, e.name]));
     archivedTransactions = (dbTransactions || []).map(t => ({
-        id: t.id, budgetId: t.budget_id, type: t.transaction_type, date: t.transaction_date, amount: Number(t.amount), description: t.description || "",
+        id: t.id, userId: t.user_id, budgetId: t.budget_id, type: t.transaction_type, date: t.transaction_date, amount: Number(t.amount), description: t.description || "",
         envelope: envelopeNames.get(t.envelope_id) || "",
         source: t.transaction_type === "transfer" ? envelopeNames.get(t.envelope_id) : undefined,
         destination: t.transfer_to_envelope_id ? envelopeNames.get(t.transfer_to_envelope_id) : undefined
@@ -1221,6 +1366,7 @@ $("newPasswordForm")?.addEventListener("submit", async event => {
     budgetProfileCache.clear();
     familyMembersCache.clear();
     familyMembersLoading.clear();
+    familyMembersPromises.clear();
     familyMembershipLoadedUserId = null;
     activeUser = null;
     activeFamily = null;
@@ -1304,9 +1450,10 @@ $("logoutButton")?.addEventListener("click", async () => {
     budgetProfileCache.clear();
     familyMembersCache.clear();
     familyMembersLoading.clear();
+    familyMembersPromises.clear();
     familyMembershipLoadedUserId = null;
     // Reset only in-memory UI state; keep the per-user preference for the next sign-in.
-    activeUser = null; activeFamily = null; activeFamilyRole = null; activeFamilyRestricted = false; budgetProfileMode = "personal"; cloudBudgetId = null; historyViewingArchive = false; archivedTransactions = []; archivedBudgetIds = []; archiveManageMode = false; showPage("loginPage");
+    activeUser = null; activeFamily = null; activeFamilyRole = null; activeFamilyRestricted = false; budgetProfileMode = "personal"; cloudBudgetId = null; historyViewingArchive = false; historyPocketFilter = null; archivedTransactions = []; archivedBudgetIds = []; archiveManageMode = false; showPage("loginPage");
 });
 $("backToHome")?.addEventListener("click", () => { renderDashboard(); showPage("homePage"); });
 $("viewProfileButton")?.addEventListener("click", () => { renderProfile(); showPage("profilePage"); });
@@ -1385,6 +1532,7 @@ async function switchBudgetProfile(mode) {
     const previousMode = budgetProfileMode;
     setBudgetProfilePreference(mode);
     historyViewingArchive = false;
+    historyPocketFilter = null;
     archivedTransactions = [];
     archivedBudgetIds = [];
     archiveManageMode = false;
@@ -1503,7 +1651,10 @@ document.querySelectorAll("[data-page]").forEach(button => {
         const target = button.dataset.page;
         if (target === "setupPage") renderSetup();
         if (target === "transactionPage") renderTransactionForm();
-        if (target === "historyPage") renderHistory();
+        if (target === "historyPage") {
+            historyPocketFilter = null;
+            renderHistory();
+        }
         if (target === "transferPage") renderTransferForm();
         showPage(target);
     });
@@ -1583,15 +1734,120 @@ function submitEnvelope(addAnother = false) {
 $("addEnvelopeForm")?.addEventListener("submit", event => { event.preventDefault(); submitEnvelope(false); });
 $("addAnotherEnvelope")?.addEventListener("click", () => submitEnvelope(true));
 
+function calculateTransactionExpression(expression) {
+    const source = expression.replace(/×/g, "*").replace(/÷/g, "/");
+    let position = 0;
+    const skipSpaces = () => { while (source[position] === " ") position++; };
+    const parseNumber = () => {
+        skipSpaces();
+        let sign = 1;
+        if (source[position] === "+" || source[position] === "-") {
+            if (source[position] === "-") sign = -1;
+            position++;
+            skipSpaces();
+        }
+        const match = source.slice(position).match(/^(?:\d+(?:\.\d*)?|\.\d+)/);
+        if (!match) throw new Error("Enter a number first.");
+        position += match[0].length;
+        return sign * Number(match[0]);
+    };
+    const parseProduct = () => {
+        let value = parseNumber();
+        while (true) {
+            skipSpaces();
+            const operator = source[position];
+            if (operator !== "*" && operator !== "/") return value;
+            position++;
+            const next = parseNumber();
+            if (operator === "/" && next === 0) throw new Error("Cannot divide by zero.");
+            value = operator === "*" ? value * next : value / next;
+        }
+    };
+    const parseSum = () => {
+        let value = parseProduct();
+        while (true) {
+            skipSpaces();
+            const operator = source[position];
+            if (operator !== "+" && operator !== "-") return value;
+            position++;
+            const next = parseProduct();
+            value = operator === "+" ? value + next : value - next;
+        }
+    };
+    if (!source.trim()) throw new Error("Enter a calculation first.");
+    const result = parseSum();
+    skipSpaces();
+    if (position !== source.length || !Number.isFinite(result)) throw new Error("Check the calculation and try again.");
+    return Number(result.toFixed(2));
+}
+
+let calculatorExpression = "";
+let calculatorJustEvaluated = false;
+
+function renderTransactionCalculator() {
+    calculatorExpression = $("transactionAmount")?.value || "";
+}
+
+function openTransactionCalculator() {
+    const panel = $("transactionCalculator");
+    if (!panel) return;
+    calculatorExpression = $("transactionAmount")?.value || "";
+    panel.hidden = false;
+    $("transactionAmount")?.setAttribute("aria-expanded", "true");
+}
+
+function closeTransactionCalculator() {
+    const panel = $("transactionCalculator");
+    if (panel) panel.hidden = true;
+    $("transactionAmount")?.setAttribute("aria-expanded", "false");
+}
+
+function evaluateTransactionCalculator() {
+    try {
+        const result = calculateTransactionExpression(calculatorExpression);
+        calculatorExpression = String(result);
+        $("transactionAmount").value = calculatorExpression;
+        calculatorJustEvaluated = true;
+        renderTransactionCalculator();
+        clearMessage("transactionCalculatorMessage");
+        return result;
+    } catch (error) {
+        setMessage("transactionCalculatorMessage", error.message);
+        return null;
+    }
+}
+
+function enterCalculatedAmount() {
+    const amount = evaluateTransactionCalculator();
+    if (amount === null) return false;
+    if (amount <= 0) {
+        setMessage("transactionCalculatorMessage", "The transaction amount must be greater than zero.");
+        return false;
+    }
+    $("transactionAmount").value = String(amount);
+    calculatorExpression = String(amount);
+    calculatorJustEvaluated = true;
+    closeTransactionCalculator();
+    $("transactionEnvelope")?.focus();
+    return true;
+}
+
 async function saveTransaction(addAnother = false) {
     const envelope = findEnvelope($("transactionEnvelope")?.value);
-    const amount = Number($("transactionAmount")?.value);
+    const amountText = $("transactionAmount")?.value.trim() || "";
+    let amount = Number(amountText);
+    if (!Number.isFinite(amount) && amountText) {
+        try { amount = calculateTransactionExpression(amountText); }
+        catch { return setMessage("transactionMessage", "Enter a valid amount or calculation."); }
+    }
     const description = $("transactionDescription")?.value.trim();
     const date = $("transactionDate")?.value;
     if (!envelope) return setMessage("transactionMessage", "Choose a pocket.");
     if (!Number.isFinite(amount) || amount <= 0) return setMessage("transactionMessage", "Enter an amount greater than zero.");
     if (!description) return setMessage("transactionMessage", "Enter a description.");
     if (!date) return setMessage("transactionMessage", "Choose a date.");
+    $("transactionAmount").value = String(amount);
+    closeTransactionCalculator();
     const keepEnvelope = envelope.name;
     const keepDate = date;
     let transactionId = Date.now();
@@ -1614,7 +1870,7 @@ async function saveTransaction(addAnother = false) {
         transactionId = data.id;
     }
     envelope.spent += amount;
-    transactions.push({ id: transactionId, type: "expense", envelope: envelope.name, amount, description, date });
+    transactions.push({ id: transactionId, userId: activeUser?.id, type: "expense", envelope: envelope.name, amount, description, date });
     refreshAll({ persist: !isRestrictedFamilyMember() });
     if (isRestrictedFamilyMember()) rememberCurrentBudgetProfile();
     $("transactionForm").reset();
@@ -1636,6 +1892,65 @@ $("transactionForm")?.addEventListener("submit", event => {
     saveTransaction(false);
 });
 $("saveAndAddNewTransaction")?.addEventListener("click", () => saveTransaction(true));
+$("transactionAmount")?.addEventListener("focus", () => {
+    if (!calculatorJustEvaluated) openTransactionCalculator();
+});
+$("transactionAmount")?.addEventListener("click", openTransactionCalculator);
+$("transactionAmount")?.addEventListener("input", event => {
+    calculatorExpression = event.currentTarget.value;
+    calculatorJustEvaluated = false;
+    renderTransactionCalculator();
+});
+$("transactionAmount")?.addEventListener("keydown", event => {
+    if (event.key === "Enter" && !$("transactionCalculator").hidden) {
+        event.preventDefault();
+        enterCalculatedAmount();
+    } else if (event.key === "Escape") {
+        event.preventDefault();
+        closeTransactionCalculator();
+    }
+});
+$("transactionCalculator")?.addEventListener("click", event => {
+    const button = event.target.closest("button[data-calculator-key], button[data-calculator-action]");
+    if (!button) return;
+    const action = button.dataset.calculatorAction;
+    if (action === "clear") {
+        calculatorExpression = "";
+        $("transactionAmount").value = "";
+        calculatorJustEvaluated = false;
+        clearMessage("transactionCalculatorMessage");
+        renderTransactionCalculator();
+        return;
+    }
+    if (action === "backspace") {
+        calculatorExpression = calculatorJustEvaluated ? "" : calculatorExpression.slice(0, -1);
+        $("transactionAmount").value = calculatorExpression;
+        calculatorJustEvaluated = false;
+        clearMessage("transactionCalculatorMessage");
+        renderTransactionCalculator();
+        return;
+    }
+    if (action === "calculate") {
+        evaluateTransactionCalculator();
+        return;
+    }
+    const key = button.dataset.calculatorKey;
+    if (!key || calculatorExpression.length >= 64) return;
+    const operator = ["+", "-", "*", "/"].includes(key);
+    if (calculatorJustEvaluated && !operator) calculatorExpression = "";
+    calculatorJustEvaluated = false;
+    calculatorExpression += key;
+    $("transactionAmount").value = calculatorExpression;
+    clearMessage("transactionCalculatorMessage");
+    renderTransactionCalculator();
+});
+$("useCalculatedAmount")?.addEventListener("click", enterCalculatedAmount);
+document.addEventListener("click", event => {
+    const calculator = $("transactionCalculator");
+    if (!calculator || calculator.hidden) return;
+    if (event.target.closest("#transactionAmount, #transactionCalculator")) return;
+    closeTransactionCalculator();
+});
 
 $("editEnvelopeForm")?.addEventListener("submit", event => {
     event.preventDefault();
@@ -1658,7 +1973,7 @@ $("transferForm")?.addEventListener("submit", event => {
     if (amount > source.budget - source.spent) return setMessage("transferMessage", "The source pocket does not have enough unspent budget.");
     source.budget -= amount;
     destination.budget += amount;
-    transactions.push({ id: Date.now(), type: "transfer", source: source.name, destination: destination.name, amount, description: `Transfer from ${source.name} to ${destination.name}`, date: new Date().toISOString().slice(0, 10) });
+    transactions.push({ id: Date.now(), userId: activeUser?.id, type: "transfer", source: source.name, destination: destination.name, amount, description: `Transfer from ${source.name} to ${destination.name}`, date: new Date().toISOString().slice(0, 10) });
     refreshAll();
     $("transferForm").reset();
     renderTransferForm();
@@ -1669,6 +1984,7 @@ $("transferForm")?.addEventListener("submit", event => {
 $("historyBackToHome")?.addEventListener("click", () => {
     historyManageMode = false;
     historyViewingArchive = false;
+    historyPocketFilter = null;
     archivedTransactions = [];
     archivedBudgetIds = [];
     archiveManageMode = false;
@@ -1676,6 +1992,11 @@ $("historyBackToHome")?.addEventListener("click", () => {
     if ($("editTransactionForm")) $("editTransactionForm").hidden = true;
     renderDashboard();
     showPage("homePage");
+});
+
+$("clearHistoryPocketFilter")?.addEventListener("click", () => {
+    historyPocketFilter = null;
+    renderHistory();
 });
 
 $("toggleHistoryManagement")?.addEventListener("click", () => {
@@ -1735,6 +2056,7 @@ supabaseClient.auth.getSession().then(async ({ data, error }) => {
         budgetProfileCache.clear();
         familyMembersCache.clear();
         familyMembersLoading.clear();
+        familyMembersPromises.clear();
         familyMembershipLoadedUserId = null;
         activeUser = null;
         activeFamily = null;
